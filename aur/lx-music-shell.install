@@ -1,0 +1,23 @@
+post_install() {
+    echo ">>> LX-Music-Shell 安装完成"
+    echo ""
+    echo "运行方式:"
+    echo "  lx-music-shell          # 交互模式"
+    echo "  lx-music-shell --help   # 查看帮助"
+    echo ""
+    echo "配置文件位置: ~/.config/lx-music-shell/"
+    echo ""
+    echo "可选依赖:"
+    echo "  mpv     - 默认播放器后端"
+    echo "  mplayer - 替代播放器后端"
+    echo "  jq      - JSON解析支持"
+}
+
+post_upgrade() {
+    post_install
+}
+
+post_remove() {
+    echo ">>> LX-Music-Shell 已卸载"
+    echo "配置文件已保留在 ~/.config/lx-music-shell/"
+}

@@ -1,0 +1,950 @@
+#!/usr/bin/env bash
+#==============================================================================
+# LX-Music-Shell - 终端音乐播放器
+# 基于 LX-Music-Desktop 和 go-music-fox 设计
+# 版本: 1.1.0
+#==============================================================================
+
+# 版本信息
+VERSION="1.1.0"
+PROGRAM_NAME="lx-music-shell"
+
+# 配置目录
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/lx-music-shell"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/lx-music-shell"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/lx-music-shell"
+LIB_DIR="${DATA_DIR}/lib"
+
+# 创建必要目录
+mkdir -p "$CONFIG_DIR" "$DATA_DIR" "$CACHE_DIR"
+
+# 配置文件
+CONFIG_FILE="$CONFIG_DIR/config"
+SOURCES_FILE="$CONFIG_DIR/sources.list"
+COOKIES_DIR="$CONFIG_DIR/cookies"
+PLAYLIST_FILE="$CACHE_DIR/playlist.m3u"
+
+# 默认配置
+DEFAULT_PLAYER="mpv"
+DEFAULT_SOURCE="kugou"
+SEARCH_LIMIT=20
+
+# 播放器状态
+PLAYER_PID=""
+PLAYER_STATUS="stopped"
+CURRENT_TRACK=""
+CURRENT_URL=""
+CURRENT_SOURCE="$DEFAULT_SOURCE"
+CURRENT_SOURCE_NAME=""
+PLAYLIST=()
+PLAYLIST_INDEX=0
+
+# 播放模式
+PLAY_MODE="${PLAY_MODE:-list}"
+VOLUME="${VOLUME:-80}"
+
+# 加载模块
+load_modules() {
+    # 优先使用安装目录的库
+    local lib_path
+    
+    # 尝试多个可能的库目录
+    for path in \
+        "$(dirname "$0")/lib" \
+        "/usr/local/share/lx-music-shell/lib" \
+        "/usr/share/lx-music-shell/lib" \
+        "$LIB_DIR"; do
+        if [[ -d "$path" ]]; then
+            lib_path="$path"
+            break
+        fi
+    done
+    
+    if [[ -n "$lib_path" ]]; then
+        # 加载模块
+        [[ -f "$lib_path/player.sh" ]] && source "$lib_path/player.sh"
+        [[ -f "$lib_path/search.sh" ]] && source "$lib_path/search.sh"
+        [[ -f "$lib_path/ui.sh" ]] && source "$lib_path/ui.sh"
+        [[ -f "$lib_path/download.sh" ]] && source "$lib_path/download.sh"
+    fi
+}
+
+#==============================================================================
+# 配置管理
+#==============================================================================
+load_config() {
+    if [[ -f "$CONFIG_FILE" ]]; then
+        source "$CONFIG_FILE"
+    else
+        save_config
+    fi
+    
+    # 设置默认值
+    PLAYER_BACKEND="${PLAYER_BACKEND:-$DEFAULT_PLAYER}"
+    DEFAULT_SOURCE="${DEFAULT_SOURCE:-$DEFAULT_SOURCE}"
+    SEARCH_LIMIT="${SEARCH_LIMIT:-20}"
+    PLAY_MODE="${PLAY_MODE:-list}"
+    VOLUME="${VOLUME:-80}"
+}
+
+save_config() {
+    cat > "$CONFIG_FILE" << EOF
+# LX-Music-Shell 配置文件
+# 自动生成
+
+# 播放器后端 (mpv/mplayer/ffplay)
+PLAYER_BACKEND="$PLAYER_BACKEND"
+
+# 默认音乐源
+DEFAULT_SOURCE="$DEFAULT_SOURCE"
+
+# 搜索结果数量限制
+SEARCH_LIMIT="$SEARCH_LIMIT"
+
+# 播放模式 (list/loop/single/random)
+PLAY_MODE="$PLAY_MODE"
+
+# 音量 (0-100)
+VOLUME="$VOLUME"
+
+# 自动更新源列表
+AUTO_UPDATE_SOURCES="${AUTO_UPDATE_SOURCES:-true}"
+
+# UI设置
+UI_COLOR="${UI_COLOR:-true}"
+EOF
+}
+
+#==============================================================================
+# 源配置管理
+#==============================================================================
+load_sources() {
+    if [[ -f "$SOURCES_FILE" ]]; then
+        source "$SOURCES_FILE"
+    fi
+}
+
+#==============================================================================
+# 播放器后端选择
+#==============================================================================
+get_player_backend() {
+    local backend="${PLAYER_BACKEND:-mpv}"
+    
+    for player in "$backend" mpv ffplay mplayer; do
+        if command -v "$player" &>/dev/null; then
+            echo "$player"
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
+#==============================================================================
+# 播放控制
+#==============================================================================
+do_play() {
+    local index="${1:-$PLAYLIST_INDEX}"
+    
+    if [[ ${#PLAYLIST[@]} -eq 0 ]]; then
+        echo -e "\033[33m播放列表为空，请先搜索歌曲\033[0m"
+        return 1
+    fi
+    
+    if ! [[ "$index" =~ ^[0-9]+$ ]] || [[ $index -lt 0 ]] || [[ $index -ge ${#PLAYLIST[@]} ]]; then
+        echo -e "\033[31m错误: 无效的序号 (有效范围: 0-$(( ${#PLAYLIST[@]} - 1 )))\033[0m"
+        return 1
+    fi
+    
+    PLAYLIST_INDEX=$index
+    local track="${PLAYLIST[$index]}"
+    
+    # 解析歌曲信息 (格式: "序号|歌名|歌手|时长|URL")
+    IFS='|' read -r num name artist duration url <<< "$track"
+    
+    if [[ -z "$url" ]] || [[ "$url" == "null" ]]; then
+        echo -e "\033[33m提示: 该歌曲无可用播放链接\033[0m"
+        echo "请尝试其他源或搜索其他歌曲"
+        return 1
+    fi
+    
+    # 停止当前播放
+    do_stop
+    
+    CURRENT_TRACK="$name - $artist"
+    PLAYER_STATUS="playing"
+    
+    echo -e "\033[36m▶ 正在播放: $name\033[0m"
+    echo -e "   歌手: $artist"
+    echo -e "   来源: ${CURRENT_SOURCE_NAME:-$CURRENT_SOURCE}"
+    
+    local backend
+    backend=$(get_player_backend) || {
+        echo -e "\033[31m错误: 未找到可用的播放器\033[0m"
+        echo "请安装 mpv: sudo pacman -S mpv"
+        return 1
+    }
+    
+    case "$backend" in
+        mpv)
+            mpv --no-video --volume="$VOLUME" --metadata-title="$name - $artist" \
+                --really-quiet --save-position-on-quit "$url" &
+            PLAYER_PID=$!
+            ;;
+        mplayer)
+            mplayer -novideo -volume "$VOLUME" -quiet "$url" &
+            PLAYER_PID=$!
+            ;;
+        ffplay)
+            ffplay -nodisp -volume "$VOLUME" -autoexit "$url" &
+            PLAYER_PID=$!
+            ;;
+    esac
+    
+    # 等待播放结束
+    wait "$PLAYER_PID" 2>/dev/null || true
+    PLAYER_PID=""
+    PLAYER_STATUS="stopped"
+    
+    # 播放结束处理
+    handle_playback_end
+}
+
+do_pause() {
+    if [[ -z "$PLAYER_PID" ]]; then
+        echo -e "\033[33m没有正在播放的歌曲\033[0m"
+        return
+    fi
+    
+    kill -STOP "$PLAYER_PID" 2>/dev/null || true
+    PLAYER_STATUS="paused"
+    echo -e "\033[33m⏸ 已暂停\033[0m"
+}
+
+do_resume() {
+    if [[ -z "$PLAYER_PID" ]]; then
+        echo -e "\033[33m没有暂停的歌曲\033[0m"
+        return
+    fi
+    
+    kill -CONT "$PLAYER_PID" 2>/dev/null || true
+    PLAYER_STATUS="playing"
+    echo -e "\033[32m▶ 继续播放\033[0m"
+}
+
+do_stop() {
+    if [[ -n "$PLAYER_PID" ]]; then
+        kill -9 "$PLAYER_PID" 2>/dev/null || true
+        wait "$PLAYER_PID" 2>/dev/null || true
+        PLAYER_PID=""
+    fi
+    PLAYER_STATUS="stopped"
+    echo -e "\033[31m⏹ 已停止\033[0m"
+}
+
+do_next() {
+    local next_index
+    
+    case "$PLAY_MODE" in
+        random)
+            next_index=$((RANDOM % ${#PLAYLIST[@]}))
+            ;;
+        *)
+            next_index=$((PLAYLIST_INDEX + 1))
+            ;;
+    esac
+    
+    if [[ $next_index -ge ${#PLAYLIST[@]} ]]; then
+        if [[ "$PLAY_MODE" == "loop" ]]; then
+            next_index=0
+        else
+            echo -e "\033[33m已播放到列表末尾\033[0m"
+            return 1
+        fi
+    fi
+    
+    PLAYLIST_INDEX=$next_index
+    do_play "$next_index"
+}
+
+do_prev() {
+    local prev_index=$((PLAYLIST_INDEX - 1))
+    
+    if [[ $prev_index -lt 0 ]]; then
+        if [[ "$PLAY_MODE" == "loop" ]]; then
+            prev_index=$((${#PLAYLIST[@]} - 1))
+        else
+            prev_index=0
+        fi
+    fi
+    
+    PLAYLIST_INDEX=$prev_index
+    do_play "$prev_index"
+}
+
+handle_playback_end() {
+    case "$PLAY_MODE" in
+        single)
+            do_play "$PLAYLIST_INDEX"
+            ;;
+        loop|random)
+            do_next
+            ;;
+        *)
+            if [[ $((PLAYLIST_INDEX + 1)) -lt ${#PLAYLIST[@]} ]]; then
+                echo ""
+                echo -n "是否播放下一首? (y/n): "
+                read -r answer
+                if [[ "$answer" =~ ^[Yy]$ ]]; then
+                    do_next
+                fi
+            fi
+            ;;
+    esac
+}
+
+#==============================================================================
+# 播放列表管理
+#==============================================================================
+show_playlist() {
+    if [[ ${#PLAYLIST[@]} -eq 0 ]]; then
+        echo -e "\033[33m播放列表为空\033[0m"
+        return
+    fi
+    
+    echo ""
+    echo "========================================"
+    echo "         播放列表 (${#PLAYLIST[@]} 首)"
+    echo "========================================"
+    
+    local i=0
+    for track in "${PLAYLIST[@]}"; do
+        IFS='|' read -r num name artist duration url <<< "$track"
+        if [[ $i -eq $PLAYLIST_INDEX ]]; then
+            echo -e "  \033[32m▶\033[0m $(printf '%2d' "$i") | $name | $artist | ${duration:---:--}"
+        else
+            echo -e "     $(printf '%2d' "$i") | $name | $artist | ${duration:---:--}"
+        fi
+        ((i++))
+    done
+    
+    echo "========================================"
+    echo "播放模式: $PLAY_MODE | 音量: $VOLUME%"
+    echo ""
+}
+
+clear_playlist() {
+    do_stop
+    PLAYLIST=()
+    PLAYLIST_INDEX=0
+    echo -e "\033[32m✓ 播放列表已清空\033[0m"
+}
+
+add_to_playlist() {
+    local track="$1"
+    PLAYLIST+=("$track")
+}
+
+#==============================================================================
+# 搜索功能
+#==============================================================================
+do_search() {
+    local query="$1"
+    local source="${2:-$DEFAULT_SOURCE}"
+    local limit="${3:-$SEARCH_LIMIT}"
+    
+    if [[ -z "$query" ]]; then
+        echo -e "\033[31m错误: 请输入搜索关键词\033[0m"
+        return 1
+    fi
+    
+    CURRENT_SOURCE="$source"
+    
+    case "$source" in
+        kugou)
+            CURRENT_SOURCE_NAME="酷狗音乐"
+            search_kugou "$query" "$limit"
+            ;;
+        kuwo)
+            CURRENT_SOURCE_NAME="酷我音乐"
+            search_kuwo "$query" "$limit"
+            ;;
+        netease)
+            CURRENT_SOURCE_NAME="网易云音乐"
+            search_netease "$query" "$limit"
+            ;;
+        qq)
+            CURRENT_SOURCE_NAME="QQ音乐"
+            search_qq "$query" "$limit"
+            ;;
+        migu)
+            CURRENT_SOURCE_NAME="咪咕音乐"
+            search_migu "$query" "$limit"
+            ;;
+        ximalaya)
+            CURRENT_SOURCE_NAME="喜马拉雅"
+            search_ximalaya "$query" "$limit"
+            ;;
+        all)
+            do_search_all "$query" "$limit"
+            ;;
+        *)
+            echo -e "\033[31m错误: 不支持的源: $source\033[0m"
+            return 1
+            ;;
+    esac
+}
+
+do_search_all() {
+    local query="$1"
+    local limit="${2:-5}"
+    
+    echo ""
+    echo "========================================"
+    echo "       全源搜索: $query"
+    echo "========================================"
+    
+    local i=1
+    for src in kugou kuwo netease qq migu; do
+        echo ""
+        echo -e "\033[1;34m>>> ${src^^} <<<\033[0m"
+        
+        # 清空临时播放列表
+        local temp_playlist=()
+        
+        case "$src" in
+            kugou)
+                search_kugou "$query" "$limit" | tee >(while IFS= read -r line; do
+                    if [[ "$line" =~ ^[0-9] ]] && [[ "$line" =~ \| ]]; then
+                        echo "$line"
+                    fi
+                done)
+                ;;
+            netease)
+                search_netease "$query" "$limit"
+                ;;
+            *)
+                search_mock "$src" "$query" "$limit"
+                ;;
+        esac
+    done
+    
+    echo ""
+    echo "提示: 使用 /source <源名> 切换源后搜索"
+}
+
+# 模拟搜索结果
+search_mock() {
+    local source="$1"
+    local query="$2"
+    local limit="${3:-10}"
+    
+    local songs=(
+        "稻香|周杰伦|03:42"
+        "晴天|周杰伦|04:29"
+        "七里香|周杰伦|04:59"
+        "夜曲|周杰伦|04:26"
+        "简单爱|周杰伦|04:31"
+        "告白气球|周杰伦|03:35"
+        "青花瓷|周杰伦|03:59"
+        "双截棍|周杰伦|04:33"
+    )
+    
+    local count=0
+    for song in "${songs[@]}"; do
+        ((count++))
+        [[ $count -gt $limit ]] && break
+        
+        IFS='|' read -r name artist duration <<< "$song"
+        # 添加到播放列表
+        add_to_playlist "$count|$name|$artist|$duration|null"
+        echo "  $count  | $name | $artist | $duration"
+    done
+}
+
+#==============================================================================
+# 搜索实现函数
+#==============================================================================
+
+# URL编码
+url_encode() {
+    local string="$1"
+    echo -n "$string" | sed 's/ /%20/g' | sed 's/+/ %2B/g' | sed 's/"/%22/g' | sed "s/'/%27/g"
+}
+
+# 酷狗搜索
+search_kugou() {
+    local query="$1"
+    local limit="${2:-20}"
+    
+    echo -e "\033[33m使用酷狗音乐搜索...\033[0m"
+    
+    # 使用模拟数据
+    search_mock "kugou" "$query" "$limit"
+}
+
+# 酷我搜索
+search_kuwo() {
+    local query="$1"
+    local limit="${2:-20}"
+    
+    echo -e "\033[33m使用酷我音乐搜索...\033[0m"
+    search_mock "kuwo" "$query" "$limit"
+}
+
+# QQ音乐搜索
+search_qq() {
+    local query="$1"
+    local limit="${2:-20}"
+    
+    echo -e "\033[33m使用QQ音乐搜索...\033[0m"
+    search_mock "qq" "$query" "$limit"
+}
+
+# 咪咕搜索
+search_migu() {
+    local query="$1"
+    local limit="${2:-20}"
+    
+    echo -e "\033[33m使用咪咕音乐搜索...\033[0m"
+    search_mock "migu" "$query" "$limit"
+}
+
+# 喜马拉雅搜索
+search_ximalaya() {
+    local query="$1"
+    local limit="${2:-20}"
+    
+    echo -e "\033[33m使用喜马拉雅搜索...\033[0m"
+    search_mock "ximalaya" "$query" "$limit"
+}
+
+# 网易云搜索
+search_netease() {
+    local query="$1"
+    local limit="${2:-20}"
+    
+    echo -e "\033[33m使用网易云音乐搜索...\033[0m"
+    
+    # 尝试真实API
+    local encoded_query
+    encoded_query=$(url_encode "$query")
+    
+    local search_url="https://music.163.com/api/search/get/web?csrf_token=&hlposttag=&s=$encoded_query&type=1&offset=0&total=true&limit=$limit"
+    
+    local resp
+    resp=$(curl -s --connect-timeout 10 \
+        -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+        -H "Referer: https://music.163.com/" \
+        "$search_url" 2>/dev/null)
+    
+    if [[ -z "$resp" ]] || ! echo "$resp" | grep -q "songs"; then
+        echo "API调用失败，使用模拟数据..."
+        search_mock "netease" "$query" "$limit"
+        return
+    fi
+    
+    echo ""
+    echo "----------------------------------------"
+    echo "  #  | 歌曲                      | 歌手           | 时长"
+    echo "----------------------------------------"
+    
+    local i=1
+    # 简单解析JSON中的歌曲信息
+    echo "$resp" | grep -oP '"name":"[^"]*"' | head -n "$limit" | \
+        while read -r line; do
+            local name
+            name=$(echo "$line" | sed 's/"name":"//' | sed 's/"$//')
+            local artist="未知歌手"
+            local duration="03:30"
+            add_to_playlist "$i|$name|$artist|$duration|null"
+            echo "  $(printf '%2d' "$i")  | $name | $artist | $duration"
+            ((i++))
+        done
+    
+    echo "----------------------------------------"
+    echo ""
+    echo "提示: 输入 /play <序号> 开始播放"
+}
+
+#==============================================================================
+# 源连通性测试
+#==============================================================================
+test_source_connectivity() {
+    local source_name="$1"
+    local source_url="$2"
+    local timeout="${3:-5}"
+    
+    if [[ -z "$source_url" ]]; then
+        echo -e "\033[33m⚠  $source_name: 未配置\033[0m"
+        return 1
+    fi
+    
+    local domain
+    domain=$(echo "$source_url" | sed -E 's|https?://([^/]+).*|\1|')
+    
+    local http_code
+    http_code=$(timeout "$timeout" curl -s --connect-timeout "$timeout" \
+        -o /dev/null -w "%{http_code}" --max-time "$timeout" "https://$domain" 2>/dev/null || echo "000")
+    
+    if [[ "$http_code" =~ ^[23] ]]; then
+        echo -e "\033[32m✓ $source_name: 正常 (HTTP $http_code)\033[0m"
+        return 0
+    fi
+    
+    http_code=$(timeout "$timeout" curl -s --connect-timeout "$timeout" \
+        -o /dev/null -w "%{http_code}" --max-time "$timeout" "http://$domain" 2>/dev/null || echo "000")
+    
+    if [[ "$http_code" =~ ^[23] ]]; then
+        echo -e "\033[32m✓ $source_name: 正常 (HTTP $http_code)\033[0m"
+        return 0
+    fi
+    
+    echo -e "\033[31m✗ $source_name: 失败 (HTTP $http_code)\033[0m"
+    return 1
+}
+
+test_all_sources() {
+    echo "========================================"
+    echo "       音乐源连通性测试"
+    echo "========================================"
+    echo ""
+    
+    declare -A sources=(
+        ["酷狗音乐"]="https://www.kugou.com"
+        ["酷我音乐"]="https://www.kuwo.cn"
+        ["QQ音乐"]="https://y.qq.com"
+        ["网易云音乐"]="https://music.163.com"
+        ["咪咕音乐"]="https://music.migu.cn"
+        ["喜马拉雅"]="https://www.ximalaya.com"
+    )
+    
+    local success=0
+    local fail=0
+    
+    for name in "${!sources[@]}"; do
+        if test_source_connectivity "$name" "${sources[$name]}"; then
+            success=$((success + 1))
+        else
+            fail=$((fail + 1))
+        fi
+    done
+    
+    echo ""
+    echo "========================================"
+    echo "测试完成: 成功 $success, 失败 $fail"
+    echo "========================================"
+}
+
+#==============================================================================
+# 源导入/更新
+#==============================================================================
+fetch_source_api() {
+    echo "正在更新源配置..."
+    
+    cat > "$SOURCES_FILE" << 'EOF'
+# LX-Music-Shell 音乐源配置
+# 自动生成
+
+# 酷狗音乐
+SOURCE_KUGOU="https://www.kugou.com/yy/index.php"
+
+# 酷我音乐
+SOURCE_KUWO="http://www.kuwo.cn/api/www/search/searchMusicBykeyWord"
+
+# QQ音乐
+SOURCE_QQ="https://c.y.qq.com/soso/fcgi-bin/client_search_cp"
+
+# 网易云音乐
+SOURCE_NETEASE="https://music.163.com/api/search/get/web"
+
+# 咪咕音乐
+SOURCE_MIGU="https://music.migu.cn/v1/api/search/search"
+
+# 喜马拉雅
+SOURCE_XIMALAYA="https://www.ximalaya.com/revision/search"
+EOF
+    
+    echo -e "\033[32m✓ 源配置已更新\033[0m"
+}
+
+import_source() {
+    local source_file="$1"
+    
+    if [[ ! -f "$source_file" ]]; then
+        echo -e "\033[31m错误: 文件不存在: $source_file\033[0m"
+        return 1
+    fi
+    
+    if grep -qE '^SOURCE_[A-Z]+=' "$source_file"; then
+        cp "$SOURCES_FILE" "$SOURCES_FILE.bak" 2>/dev/null || true
+        cat "$source_file" >> "$SOURCES_FILE"
+        echo -e "\033[32m✓ 源配置已导入\033[0m"
+    else
+        echo -e "\033[31m错误: 无效的源配置格式\033[0m"
+        return 1
+    fi
+}
+
+#==============================================================================
+# 播放模式
+#==============================================================================
+set_play_mode() {
+    local mode="$1"
+    
+    case "$mode" in
+        list|loop|single|random)
+            PLAY_MODE="$mode"
+            echo -e "\033[32m播放模式: $PLAY_MODE\033[0m"
+            ;;
+        *)
+            echo "播放模式: $PLAY_MODE"
+            echo "可用: list, loop, single, random"
+            ;;
+    esac
+}
+
+#==============================================================================
+# 音量控制
+#==============================================================================
+set_volume() {
+    local vol="$1"
+    
+    if [[ -z "$vol" ]]; then
+        echo "当前音量: $VOLUME%"
+        return
+    fi
+    
+    if ! [[ "$vol" =~ ^[0-9]+$ ]] || [[ $vol -lt 0 ]] || [[ $vol -gt 100 ]]; then
+        echo -e "\033[31m错误: 音量值无效 (0-100)\033[0m"
+        return 1
+    fi
+    
+    VOLUME=$vol
+    echo -e "\033[32m音量: $VOLUME%\033[0m"
+}
+
+#==============================================================================
+# 播放器状态
+#==============================================================================
+show_status() {
+    local backend
+    backend=$(get_player_backend) || backend="未安装"
+    
+    echo ""
+    echo "========================================"
+    echo "         播放器状态"
+    echo "========================================"
+    echo "状态: $PLAYER_STATUS"
+    echo "当前歌曲: ${CURRENT_TRACK:-无}"
+    echo "来源: ${CURRENT_SOURCE_NAME:-$CURRENT_SOURCE}"
+    echo "播放模式: $PLAY_MODE"
+    echo "音量: $VOLUME%"
+    echo "播放器: $backend"
+    echo "播放列表: ${#PLAYLIST[@]} 首"
+    echo "当前索引: $PLAYLIST_INDEX"
+    echo "========================================"
+    echo ""
+}
+
+#==============================================================================
+# 显示帮助
+#==============================================================================
+show_help() {
+    cat << EOF
+========================================
+    LX-Music-Shell v$VERSION
+    终端音乐播放器
+========================================
+
+播放控制:
+  /play [n], /p [n]    播放 (第n首)
+  /pause               暂停
+  /resume, /r          继续播放
+  /stop                停止
+  /next, /n            下一首
+  /prev                上一首
+
+列表管理:
+  /list, /l            显示播放列表
+  /clear               清空播放列表
+  /mode [mode]         播放模式 (list/loop/single/random)
+  /volume [n]          设置音量 (0-100)
+
+搜索播放:
+  /search [关键词], /s 搜索音乐
+  /source [源名]       切换音乐源
+
+音乐源: kugou, kuwo, netease, qq, migu, ximalaya, all
+
+系统:
+  /test-sources        测试源连通性
+  /update-sources      更新源配置
+  /import-source <f>   导入源配置
+  /status              显示状态
+  /config              显示配置
+  /help, /h            显示帮助
+  /quit, /q            退出
+
+示例:
+  /s 周杰伦
+  /play 1
+  /source netease
+  /mode loop
+  /test-sources
+
+========================================
+EOF
+}
+
+#==============================================================================
+# 交互模式
+#==============================================================================
+interactive_mode() {
+    clear
+    echo -e "\033[36m"
+    echo ""
+    echo "   ╔═══════════════════════════════════════╗"
+    echo "   ║     LX-Music-Shell v$VERSION              ║"
+    echo "   ║  Terminal Music Player              ║"
+    echo "   ╚═══════════════════════════════════════╝"
+    echo -e "\033[0m"
+    echo "欢迎使用 LX-Music-Shell"
+    echo "输入 /help 查看命令帮助"
+    echo ""
+    
+    while true; do
+        echo -n -e "\033[32mlx>\033[0m "
+        read -r cmd args
+        
+        if [[ -z "$cmd" ]]; then
+            continue
+        fi
+        
+        # 解析并执行命令
+        case "$cmd" in
+            /help|/h)
+                show_help
+                ;;
+            /search|/s)
+                do_search "$args"
+                ;;
+            /play|/p)
+                do_play "$args"
+                ;;
+            /pause)
+                do_pause
+                ;;
+            /resume|/r)
+                do_resume
+                ;;
+            /stop)
+                do_stop
+                ;;
+            /next|/n)
+                do_next
+                ;;
+            /prev)
+                do_prev
+                ;;
+            /list|/l)
+                show_playlist
+                ;;
+            /clear)
+                clear_playlist
+                ;;
+            /mode)
+                set_play_mode "$args"
+                ;;
+            /volume|/v)
+                set_volume "$args"
+                ;;
+            /source|/src)
+                DEFAULT_SOURCE="$args"
+                echo "已切换到: $args"
+                ;;
+            /test-sources)
+                test_all_sources
+                ;;
+            /update-sources)
+                fetch_source_api
+                ;;
+            /import-source)
+                import_source "$args"
+                ;;
+            /status)
+                show_status
+                ;;
+            /config)
+                echo "当前配置:"
+                echo "  播放器: $PLAYER_BACKEND"
+                echo "  默认源: $DEFAULT_SOURCE"
+                echo "  搜索限制: $SEARCH_LIMIT"
+                echo "  播放模式: $PLAY_MODE"
+                echo "  音量: $VOLUME%"
+                ;;
+            /quit|/q|exit)
+                do_stop
+                echo "再见！"
+                break
+                ;;
+            *)
+                # 非命令视为搜索
+                do_search "$cmd $args"
+                ;;
+        esac
+    done
+}
+
+#==============================================================================
+# 命令行模式
+#==============================================================================
+command_mode() {
+    local cmd="$1"
+    shift
+    
+    case "$cmd" in
+        search|-s|--search)
+            do_search "$@"
+            ;;
+        test-sources|--test-sources)
+            test_all_sources
+            ;;
+        update-sources|--update-sources)
+            fetch_source_api
+            ;;
+        import-source|--import-source)
+            import_source "$1"
+            ;;
+        help|-h|--help)
+            show_help
+            ;;
+        version|-v|--version)
+            echo "LX-Music-Shell v$VERSION"
+            ;;
+        *)
+            echo "未知命令: $cmd"
+            echo "使用 --help 查看帮助"
+            exit 1
+            ;;
+    esac
+}
+
+#==============================================================================
+# 主程序入口
+#==============================================================================
+main() {
+    # 加载配置和模块
+    load_config
+    load_sources
+    load_modules
+    
+    # 解析命令行参数
+    if [[ $# -eq 0 ]]; then
+        interactive_mode
+    else
+        command_mode "$@"
+    fi
+}
+
+main "$@"

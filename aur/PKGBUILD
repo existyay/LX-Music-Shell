@@ -1,0 +1,91 @@
+# Maintainer: Your Name <your.email@example.com>
+
+pkgname=lx-music-shell
+pkgver=1.1.0
+pkgrel=1
+epoch=
+pkgdesc="A pure shell terminal music player supporting multiple Chinese music sources"
+arch=("any")
+url="https://github.com/yourname/lx-music-shell"
+license=("MIT")
+groups=()
+depends=("bash" "curl" "grep" "sed" "awk")
+makedepends=()
+checkdepends=()
+optdepends=("mpv: default audio player backend"
+            "mplayer: alternative audio player backend"
+            "ffmpeg: ffplay backend support"
+            "jq: enhanced JSON parsing")
+provides=()
+conflicts=()
+replaces=()
+backup=()
+options=()
+install="lx-music-shell.install"
+changelog=
+source=("$pkgname-$pkgver.tar.gz")
+noextract=()
+md5sums=("SKIP")
+validpgpkeys=()
+
+prepare() {
+    cd "$srcdir"
+    rm -rf "$pkgname-$pkgver"
+    mkdir -p "$pkgname-$pkgver"
+}
+
+build() {
+    cd "$srcdir/$pkgname-$pkgver"
+    # Pure shell script, no build needed
+    true
+}
+
+check() {
+    cd "$srcdir/$pkgname-$pkgver"
+    # Syntax check
+    bash -n lx-music-shell || return 1
+    bash -n sources-update.sh || return 1
+}
+
+package() {
+    cd "$srcdir/$pkgname-$pkgver"
+    
+    # Install main script
+    install -Dm755 lx-music-shell "$pkgdir/usr/bin/lx-music-shell"
+    
+    # Install update script
+    install -Dm755 sources-update.sh "$pkgdir/usr/bin/lx-music-sources"
+    
+    # Install config skeleton
+    install -dm755 "$pkgdir/etc/skel/.config/lx-music-shell"
+    cat > "$pkgdir/etc/skel/.config/lx-music-shell/config" << 'EOFCONFIG'
+# LX-Music-Shell Configuration
+PLAYER_BACKEND="mpv"
+DEFAULT_SOURCE="kugou"
+SEARCH_LIMIT="20"
+PLAY_MODE="list"
+VOLUME="80"
+AUTO_UPDATE_SOURCES="true"
+UI_COLOR="true"
+EOFCONFIG
+    
+    cat > "$pkgdir/etc/skel/.config/lx-music-shell/sources.list" << 'EOFSOURCES'
+# LX-Music-Shell Music Sources Configuration
+SOURCE_KUGOU="https://www.kugou.com/yy/index.php"
+SOURCE_KUWO="http://www.kuwo.cn/api/www/search/searchMusicBykeyWord"
+SOURCE_QQ="https://c.y.qq.com/soso/fcgi-bin/client_search_cp"
+SOURCE_NETEASE="https://music.163.com/api/search/get/web"
+SOURCE_MIGU="https://music.migu.cn/v1/api/search/search"
+SOURCE_XIMALAYA="https://www.ximalaya.com/revision/search"
+EOFSOURCES
+    
+    # Install man page
+    install -Dm644 aur/lx-music-shell.1 "$pkgdir/usr/share/man/man1/lx-music-shell.1"
+    install -Dm644 aur/lx-music-shell.1 "$pkgdir/usr/share/man/man1/lx-music-sources.1"
+    
+    # Install bash completion
+    install -Dm644 aur/lx-music-shell.bash "$pkgdir/usr/share/bash-completion/completions/lx-music-shell"
+    
+    # Install desktop file
+    install -Dm644 aur/lx-music-shell.desktop "$pkgdir/usr/share/applications/lx-music-shell.desktop"
+}

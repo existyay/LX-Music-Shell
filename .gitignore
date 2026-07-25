@@ -1,0 +1,21 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.idea/
+
+# Build files
+*.tar.gz
+*.pkg.tar.zst
+
+# Config files (user-specific)
+.config/lx-music-shell/config
+.config/lx-music-shell/sources.list
+.cache/lx-music-shell/
+
+# Test output
+*.log
