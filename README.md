@@ -12,7 +12,7 @@
 - ✅ **源连通性测试**: 一键测试所有音乐源连接状态
 - 🔗 **源自动获取/导入**: 自动从网络获取最新源配置，支持导入外部源
 - 🎨 **友好界面**: ASCII 艺术界面，色彩输出
-- 📦 **Arch Linux AUR**: 可直接通过 AUR 安装
+- 📦 **Arch Linux AUR**: 可直接通过 yay/pacman 安装和卸载
 
 ## 支持的音乐源
 
@@ -42,7 +42,7 @@
 
 安装所有依赖:
 ```bash
-sudo pacman -S bash curl grep sed awk mpv jq
+sudo pacman -S bash curl grep sed awk mpv jq ffmpeg
 ```
 
 ## 快速开始
@@ -129,11 +129,52 @@ chmod +x install.sh
 ./install.sh
 ```
 
+## 卸载
+
+### 使用 pacman/yay (推荐)
+
+```bash
+# 仅卸载包 (保留配置)
+sudo pacman -R lx-music-shell
+yay -R lx-music-shell
+
+# 卸载及依赖 (推荐)
+sudo pacman -Rns lx-music-shell
+yay -Rns lx-music-shell
+```
+
+### 使用卸载脚本
+
+```bash
+# AUR 安装版本
+sudo lx-music-shell-uninstall
+
+# 手动安装版本
+./uninstall.sh
+```
+
+卸载脚本会询问是否保留用户配置。
+
+### 手动清理 (完整)
+
+```bash
+# 卸载包
+sudo pacman -Rns lx-music-shell
+
+# 删除用户配置
+rm -rf ~/.config/lx-music-shell
+rm -rf ~/.cache/lx-music-shell
+rm -rf ~/.local/share/lx-music-shell
+rm -rf ~/Music/LX-Music-Shell
+```
+
 ## 配置文件
 
 - 主配置: `~/.config/lx-music-shell/config`
 - 源配置: `~/.config/lx-music-shell/sources.list`
 - 缓存: `~/.cache/lx-music-shell/`
+- 数据: `~/.local/share/lx-music-shell/`
+- 下载音乐: `~/Music/LX-Music-Shell/`
 
 ## 自定义音乐源
 

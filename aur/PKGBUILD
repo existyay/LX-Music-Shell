@@ -1,4 +1,5 @@
 # Maintainer: Your Name <your.email@example.com>
+# Contributor: Your Name <your.email@example.com>
 
 pkgname=lx-music-shell
 pkgver=1.1.0
@@ -19,7 +20,8 @@ optdepends=("mpv: default audio player backend"
 provides=()
 conflicts=()
 replaces=()
-backup=()
+backup=("etc/skel/.config/lx-music-shell/config"
+        "etc/skel/.config/lx-music-shell/sources.list")
 options=()
 install="lx-music-shell.install"
 changelog=
@@ -56,8 +58,13 @@ package() {
     # Install update script
     install -Dm755 sources-update.sh "$pkgdir/usr/bin/lx-music-sources"
     
-    # Install config skeleton
+    # Install uninstall script
+    install -Dm755 uninstall.sh "$pkgdir/usr/bin/lx-music-shell-uninstall"
+    
+    # Install config skeleton (marked as backup)
     install -dm755 "$pkgdir/etc/skel/.config/lx-music-shell"
+    
+    # Default config
     cat > "$pkgdir/etc/skel/.config/lx-music-shell/config" << 'EOFCONFIG'
 # LX-Music-Shell Configuration
 PLAYER_BACKEND="mpv"
@@ -69,6 +76,7 @@ AUTO_UPDATE_SOURCES="true"
 UI_COLOR="true"
 EOFCONFIG
     
+    # Default sources
     cat > "$pkgdir/etc/skel/.config/lx-music-shell/sources.list" << 'EOFSOURCES'
 # LX-Music-Shell Music Sources Configuration
 SOURCE_KUGOU="https://www.kugou.com/yy/index.php"
@@ -88,4 +96,10 @@ EOFSOURCES
     
     # Install desktop file
     install -Dm644 aur/lx-music-shell.desktop "$pkgdir/usr/share/applications/lx-music-shell.desktop"
+    
+    # Install license
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE" 2>/dev/null || true
+    
+    # Install README
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md" 2>/dev/null || true
 }
