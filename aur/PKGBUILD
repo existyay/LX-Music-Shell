@@ -3,21 +3,39 @@
 
 pkgname=lx-music-shell
 pkgver=1.1.0
-pkgrel=1
+pkgrel=2
 epoch=
-pkgdesc="A pure shell terminal music player supporting multiple Chinese music sources"
+pkgdesc="A pure shell terminal music player supporting multiple Chinese music sources with auto-reconnect on network/bluetooth drop"
 arch=("any")
 url="https://github.com/yourname/lx-music-shell"
 license=("MIT")
 groups=()
-depends=("bash" "curl" "grep" "sed" "awk")
+# 必需依赖 - 程序核心运行所必需
+depends=("bash>=4.4"
+         "curl"
+         "coreutils"           # timeout, tr, cat, etc.
+         "grep"
+         "sed"
+         "gawk"
+         "procps-ng"           # kill, wait, ps
+         "iputils"             # ping (网络监控)
+         "ncurses"             # tput for terminal control
+         "glibc")              # date, sleep
 makedepends=()
 checkdepends=()
-optdepends=("mpv: default audio player backend"
+# 可选依赖 - 增强体验
+optdepends=("mpv: recommended audio player backend (high quality, low CPU)"
             "mplayer: alternative audio player backend"
-            "ffmpeg: ffplay backend support"
-            "jq: enhanced JSON parsing")
-provides=()
+            "ffmpeg: ffplay backend support and audio tools"
+            "jq: enhanced JSON parsing for music APIs"
+            "bluez: bluetooth support and monitoring"
+            "bluez-utils: bluetoothctl for bluetooth device management"
+            "networkmanager: network management integration"
+            "wireless_tools: WiFi connection monitoring"
+            "alsa-utils: ALSA audio control"
+            "pulseaudio: PulseAudio audio system support"
+            "pipewire: PipeWire audio system support")
+provides=("lx-music-shell" "lx-music-sources")
 conflicts=()
 replaces=()
 backup=("etc/skel/.config/lx-music-shell/config"
@@ -47,6 +65,9 @@ check() {
     # Syntax check
     bash -n lx-music-shell || return 1
     bash -n sources-update.sh || return 1
+    bash -n uninstall.sh || return 1
+    bash -n install.sh || return 1
+    bash -n install-aur.sh || return 1
 }
 
 package() {
@@ -61,19 +82,44 @@ package() {
     # Install uninstall script
     install -Dm755 uninstall.sh "$pkgdir/usr/bin/lx-music-shell-uninstall"
     
+    # Install install scripts
+    install -Dm755 install.sh "$pkgdir/usr/share/lx-music-shell/install.sh"
+    install -Dm755 install-aur.sh "$pkgdir/usr/share/lx-music-shell/install-aur.sh"
+    
     # Install config skeleton (marked as backup)
     install -dm755 "$pkgdir/etc/skel/.config/lx-music-shell"
     
-    # Default config
+    # Default config with new network monitor options
     cat > "$pkgdir/etc/skel/.config/lx-music-shell/config" << 'EOFCONFIG'
 # LX-Music-Shell Configuration
+
+# 播放器后端 (mpv/mplayer/ffplay)
 PLAYER_BACKEND="mpv"
+
+# 默认音乐源
 DEFAULT_SOURCE="kugou"
+
+# 搜索结果数量限制
 SEARCH_LIMIT="20"
+
+# 播放模式 (list/loop/single/random)
 PLAY_MODE="list"
+
+# 音量 (0-100)
 VOLUME="80"
+
+# 自动更新源列表
 AUTO_UPDATE_SOURCES="true"
+
+# UI设置
 UI_COLOR="true"
+
+# 网络监控设置
+NETWORK_CHECK_INTERVAL="3"           # 网络检测间隔(秒)
+MAX_RECONNECT_ATTEMPTS="5"           # 最大重连尝试次数
+RECONNECT_DELAY="2"                  # 重连延迟(秒)
+AUTO_RECONNECT="true"                # 自动重连开关
+WATCH_BLUETOOTH="true"               # 监控蓝牙状态
 EOFCONFIG
     
     # Default sources
@@ -87,9 +133,10 @@ SOURCE_MIGU="https://music.migu.cn/v1/api/search/search"
 SOURCE_XIMALAYA="https://www.ximalaya.com/revision/search"
 EOFSOURCES
     
-    # Install man page
+    # Install man pages
     install -Dm644 aur/lx-music-shell.1 "$pkgdir/usr/share/man/man1/lx-music-shell.1"
     install -Dm644 aur/lx-music-shell.1 "$pkgdir/usr/share/man/man1/lx-music-sources.1"
+    install -Dm644 aur/lx-music-shell.1 "$pkgdir/usr/share/man/man1/lx-music-shell-uninstall.1"
     
     # Install bash completion
     install -Dm644 aur/lx-music-shell.bash "$pkgdir/usr/share/bash-completion/completions/lx-music-shell"
@@ -98,8 +145,11 @@ EOFSOURCES
     install -Dm644 aur/lx-music-shell.desktop "$pkgdir/usr/share/applications/lx-music-shell.desktop"
     
     # Install license
-    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE" 2>/dev/null || true
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     
     # Install README
-    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md" 2>/dev/null || true
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+    
+    # Install AUR README
+    install -Dm644 aur/README.md "$pkgdir/usr/share/doc/$pkgname/AUR-README.md"
 }

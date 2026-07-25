@@ -32,6 +32,7 @@ SEARCH_LIMIT=20
 # 播放器状态
 PLAYER_PID=""
 PLAYER_STATUS="stopped"
+PLAYER_BUFFERING="false"
 CURRENT_TRACK=""
 CURRENT_URL=""
 CURRENT_SOURCE="$DEFAULT_SOURCE"
@@ -42,6 +43,20 @@ PLAYLIST_INDEX=0
 # 播放模式
 PLAY_MODE="${PLAY_MODE:-list}"
 VOLUME="${VOLUME:-80}"
+
+# 网络监控状态
+NETWORK_STATUS="connected"      # connected | disconnected | reconnecting
+LAST_CONNECTIVITY_CHECK=0
+NETWORK_CHECK_INTERVAL=3        # 秒
+RECONNECT_ATTEMPTS=0
+MAX_RECONNECT_ATTEMPTS=5
+RECONNECT_DELAY=2               # 秒
+WATCHDOG_PID=""
+
+# 缓冲/播放进度
+PLAYBACK_POSITION=0             # 秒
+PLAYBACK_DURATION=0             # 秒
+PLAYBACK_START_TIME=0
 
 # 加载模块
 load_modules() {
@@ -141,10 +156,111 @@ get_player_backend() {
 }
 
 #==============================================================================
+# 网络状态监控 (蓝牙断线、网络中断自动重连)
+#==============================================================================
+
+# 检测网络连接
+check_connectivity() {
+    # 检查多个主机，确保准确判断
+    local hosts=("8.8.8.8" "1.1.1.1" "223.5.5.5")
+    
+    for host in "${hosts[@]}"; do
+        if timeout 2 ping -c 1 -W 2 "$host" &>/dev/null; then
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
+# 网络监控循环 (后台守护进程)
+network_watchdog() {
+    while true; do
+        sleep "$NETWORK_CHECK_INTERVAL"
+        
+        # 只在播放中检查网络
+        if [[ "$PLAYER_STATUS" != "playing" ]]; then
+            continue
+        fi
+        
+        local now=$(date +%s)
+        
+        if check_connectivity; then
+            if [[ "$NETWORK_STATUS" == "disconnected" ]]; then
+                echo -e "\n\033[32m✓ 网络已恢复\033[0m"
+                NETWORK_STATUS="connected"
+                RECONNECT_ATTEMPTS=0
+            fi
+            NETWORK_STATUS="connected"
+            LAST_CONNECTIVITY_CHECK=$now
+        else
+            if [[ "$NETWORK_STATUS" == "connected" ]]; then
+                echo -e "\n\033[33m⚠ 网络中断，尝试重连...\033[0m"
+                NETWORK_STATUS="disconnected"
+                handle_network_loss
+            fi
+        fi
+    done
+}
+
+# 处理网络丢失
+handle_network_loss() {
+    NETWORK_STATUS="disconnected"
+    PLAYER_STATUS="buffering"
+    PLAYER_BUFFERING="true"
+    
+    # 启动重连循环
+    local attempt=0
+    
+    while [[ $attempt -lt $MAX_RECONNECT_ATTEMPTS ]]; do
+        RECONNECT_ATTEMPTS=$((attempt + 1))
+        
+        echo -e "\033[36m重连尝试 $((attempt + 1))/$MAX_RECONNECT_ATTEMPTS...\033[0m"
+        sleep "$RECONNECT_DELAY"
+        
+        if check_connectivity; then
+            echo -e "\033[32m✓ 网络恢复，续播中...\033[0m"
+            NETWORK_STATUS="connected"
+            PLAYER_BUFFERING="false"
+            PLAYER_STATUS="playing"
+            
+            # 重新播放当前歌曲
+            if [[ $PLAYLIST_INDEX -ge 0 ]] && [[ $PLAYLIST_INDEX -lt ${#PLAYLIST[@]} ]]; then
+                do_play "$PLAYLIST_INDEX" --no-message
+            fi
+            return 0
+        fi
+        
+        attempt=$((attempt + 1))
+    done
+    
+    echo -e "\033[31m✗ 重连失败，播放已停止\033[0m"
+    do_stop
+    return 1
+}
+
+# 启动网络监控
+start_watchdog() {
+    if [[ -z "$WATCHDOG_PID" ]] || ! kill -0 "$WATCHDOG_PID" 2>/dev/null; then
+        network_watchdog &
+        WATCHDOG_PID=$!
+    fi
+}
+
+# 停止网络监控
+stop_watchdog() {
+    if [[ -n "$WATCHDOG_PID" ]]; then
+        kill "$WATCHDOG_PID" 2>/dev/null || true
+        WATCHDOG_PID=""
+    fi
+}
+
+#==============================================================================
 # 播放控制
 #==============================================================================
 do_play() {
     local index="${1:-$PLAYLIST_INDEX}"
+    local silent="${2:-}"
     
     if [[ ${#PLAYLIST[@]} -eq 0 ]]; then
         echo -e "\033[33m播放列表为空，请先搜索歌曲\033[0m"
@@ -172,11 +288,16 @@ do_play() {
     do_stop
     
     CURRENT_TRACK="$name - $artist"
+    CURRENT_URL="$url"
     PLAYER_STATUS="playing"
+    PLAYBACK_START_TIME=$(date +%s)
     
-    echo -e "\033[36m▶ 正在播放: $name\033[0m"
-    echo -e "   歌手: $artist"
-    echo -e "   来源: ${CURRENT_SOURCE_NAME:-$CURRENT_SOURCE}"
+    if [[ "$silent" != "--no-message" ]]; then
+        echo -e "\033[36m▶ 正在播放: $name\033[0m"
+        echo -e "   歌手: $artist"
+        echo -e "   来源: ${CURRENT_SOURCE_NAME:-$CURRENT_SOURCE}"
+        render_status_bar
+    fi
     
     local backend
     backend=$(get_player_backend) || {
@@ -201,13 +322,30 @@ do_play() {
             ;;
     esac
     
-    # 等待播放结束
-    wait "$PLAYER_PID" 2>/dev/null || true
-    PLAYER_PID=""
-    PLAYER_STATUS="stopped"
+    # 启动网络监控 (后台守护)
+    start_watchdog
     
-    # 播放结束处理
-    handle_playback_end
+    # 后台监控播放器退出 (非阻塞)
+    (
+        wait "$PLAYER_PID" 2>/dev/null
+        # 播放器进程退出后
+        PLAYER_EXIT_CODE=$?
+        if [[ "$PLAYER_STATUS" == "playing" ]] || [[ "$PLAYER_STATUS" == "buffering" ]]; then
+            # 如果状态还在播放/缓冲，表示是意外中断
+            if [[ "$NETWORK_STATUS" == "connected" ]]; then
+                # 网络正常但播放退出 - 是正常结束
+                PLAYER_STATUS="stopped"
+                handle_playback_end
+            else
+                # 网络中断导致的退出，不处理
+                :
+            fi
+        fi
+    ) &
+    WATCHER_PID=$!
+    
+    # 不阻塞，让用户可以继续输入命令
+    return 0
 }
 
 do_pause() {
@@ -229,6 +367,7 @@ do_resume() {
     
     kill -CONT "$PLAYER_PID" 2>/dev/null || true
     PLAYER_STATUS="playing"
+    PLAYBACK_START_TIME=$(($(date +%s) - PLAYBACK_POSITION))
     echo -e "\033[32m▶ 继续播放\033[0m"
 }
 
@@ -238,8 +377,168 @@ do_stop() {
         wait "$PLAYER_PID" 2>/dev/null || true
         PLAYER_PID=""
     fi
+    if [[ -n "$WATCHER_PID" ]]; then
+        kill "$WATCHER_PID" 2>/dev/null || true
+        WATCHER_PID=""
+    fi
     PLAYER_STATUS="stopped"
     echo -e "\033[31m⏹ 已停止\033[0m"
+}
+
+#==============================================================================
+# 状态栏渲染
+#==============================================================================
+
+# 格式化时间为 mm:ss
+format_time() {
+    local seconds="${1:-0}"
+    local mins=$((seconds / 60))
+    local secs=$((seconds % 60))
+    printf "%02d:%02d" "$mins" "$secs"
+}
+
+# 获取网络状态图标
+network_icon() {
+    case "$NETWORK_STATUS" in
+        connected)
+            echo -e "\033[32m●\033[0m"   # 绿色在线
+            ;;
+        disconnected)
+            echo -e "\033[31m●\033[0m"   # 红色离线
+            ;;
+        reconnecting)
+            echo -e "\033[33m●\033[0m"   # 黄色重连中
+            ;;
+        *)
+            echo -e "\033[90m●\033[0m"   # 灰色未知
+            ;;
+    esac
+}
+
+# 获取播放状态图标
+status_icon() {
+    case "$PLAYER_STATUS" in
+        playing)
+            echo -e "\033[32m▶\033[0m"
+            ;;
+        paused)
+            echo -e "\033[33m⏸\033[0m"
+            ;;
+        buffering)
+            echo -e "\033[36m⌛\033[0m"
+            ;;
+        stopped)
+            echo -e "\033[90m⏹\033[0m"
+            ;;
+        *)
+            echo -e "\033[90m─\033[0m"
+            ;;
+    esac
+}
+
+# 绘制进度条
+draw_progress_bar() {
+    local position="${1:-0}"
+    local duration="${2:-0}"
+    local width=20
+    
+    if [[ "$duration" -eq 0 ]]; then
+        printf "[%s]" "$(printf '─%.0s' $(seq 1 $width))"
+        return
+    fi
+    
+    local percent=$((position * 100 / duration))
+    local filled=$((percent * width / 100))
+    local remaining=$((width - filled))
+    
+    printf "[\033[32m%s\033[90m%s\033[0m]" \
+        "$(printf '█%.0s' $(seq 1 $filled))" \
+        "$(printf '░%.0s' $(seq 1 $remaining))"
+}
+
+# 渲染状态栏 (单行实时状态)
+render_status_bar() {
+    local position=0
+    if [[ "$PLAYER_STATUS" == "playing" ]] && [[ $PLAYBACK_START_TIME -gt 0 ]]; then
+        position=$(($(date +%s) - PLAYBACK_START_TIME))
+    fi
+    
+    local position_str
+    position_str=$(format_time "$position")
+    local duration_str="--:--"
+    if [[ $PLAYBACK_DURATION -gt 0 ]]; then
+        duration_str=$(format_time "$PLAYBACK_DURATION")
+    fi
+    
+    local status_str
+    case "$PLAYER_STATUS" in
+        playing) status_str="播放中" ;;
+        paused) status_str="已暂停" ;;
+        buffering) status_str="缓冲中" ;;
+        stopped) status_str="已停止" ;;
+        *) status_str="未知" ;;
+    esac
+    
+    local net_str="已连接"
+    case "$NETWORK_STATUS" in
+        disconnected) net_str="\033[31m已断开\033[0m" ;;
+        reconnecting) net_str="\033[33m重连中($RECONNECT_ATTEMPTS/$MAX_RECONNECT_ATTEMPTS)\033[0m" ;;
+        *) net_str="已连接" ;;
+    esac
+    
+    local track_info="${CURRENT_TRACK:-无}"
+    if [[ ${#track_info} -gt 25 ]]; then
+        track_info="${track_info:0:22}..."
+    fi
+    
+    printf "  %s %-6s | %s | %s %s/%s | 🔊 %d%% | %s %s\n" \
+        "$(status_icon)" \
+        "$status_str" \
+        "$track_info" \
+        "$(draw_progress_bar "$position" "$PLAYBACK_DURATION")" \
+        "$position_str" "$duration_str" \
+        "$VOLUME" \
+        "$(network_icon)" \
+        "$net_str"
+}
+
+# 连续显示状态栏 (后台任务)
+status_bar_loop() {
+    while [[ "$PLAYER_STATUS" == "playing" ]] || [[ "$PLAYER_STATUS" == "paused" ]] || [[ "$PLAYER_STATUS" == "buffering" ]]; do
+        # 清除上一行
+        printf "\033[2K\r"
+        render_status_bar
+        sleep 1
+    done
+}
+
+# 启动状态栏 (后台)
+start_status_bar() {
+    status_bar_loop &
+    STATUS_BAR_PID=$!
+}
+
+# 停止状态栏
+stop_status_bar() {
+    if [[ -n "$STATUS_BAR_PID" ]]; then
+        kill "$STATUS_BAR_PID" 2>/dev/null || true
+        STATUS_BAR_PID=""
+        printf "\n"
+    fi
+}
+
+# 干净退出播放器资源
+cleanup_player() {
+    stop_watchdog
+    stop_status_bar
+    if [[ -n "$PLAYER_PID" ]]; then
+        kill -9 "$PLAYER_PID" 2>/dev/null || true
+        PLAYER_PID=""
+    fi
+    if [[ -n "$WATCHER_PID" ]]; then
+        kill "$WATCHER_PID" 2>/dev/null || true
+        WATCHER_PID=""
+    fi
 }
 
 do_next() {
@@ -731,11 +1030,39 @@ show_status() {
     local backend
     backend=$(get_player_backend) || backend="未安装"
     
+    # 计算播放进度
+    local position=0
+    if [[ "$PLAYER_STATUS" == "playing" ]] && [[ $PLAYBACK_START_TIME -gt 0 ]]; then
+        position=$(($(date +%s) - PLAYBACK_START_TIME))
+    fi
+    local position_str
+    position_str=$(format_time "$position")
+    local duration_str
+    duration_str=$(format_time "$PLAYBACK_DURATION")
+    
+    # 网络状态描述
+    local net_desc
+    case "$NETWORK_STATUS" in
+        connected)
+            net_desc="● 已连接"
+            ;;
+        disconnected)
+            net_desc="○ 已断开"
+            ;;
+        reconnecting)
+            net_desc="⟳ 重连中 ($RECONNECT_ATTEMPTS/$MAX_RECONNECT_ATTEMPTS)"
+            ;;
+        *)
+            net_desc="? 未知"
+            ;;
+    esac
+    
     echo ""
     echo "========================================"
     echo "         播放器状态"
     echo "========================================"
     echo "状态: $PLAYER_STATUS"
+    echo "进度: $position_str / $duration_str"
     echo "当前歌曲: ${CURRENT_TRACK:-无}"
     echo "来源: ${CURRENT_SOURCE_NAME:-$CURRENT_SOURCE}"
     echo "播放模式: $PLAY_MODE"
@@ -743,6 +1070,10 @@ show_status() {
     echo "播放器: $backend"
     echo "播放列表: ${#PLAYLIST[@]} 首"
     echo "当前索引: $PLAYLIST_INDEX"
+    echo "----------------------------------------"
+    echo "网络状态: $net_desc"
+    echo "自动重连: $([ "$AUTO_RECONNECT" = "true" ] && echo "启用" || echo "禁用")"
+    echo "重连尝试: $RECONNECT_ATTEMPTS/$MAX_RECONNECT_ATTEMPTS"
     echo "========================================"
     echo ""
 }
@@ -782,6 +1113,9 @@ show_help() {
   /update-sources      更新源配置
   /import-source <f>   导入源配置
   /status              显示状态
+  /statusbar           显示实时状态栏
+  /network             检查网络状态
+  /reconnect           手动重连
   /config              显示配置
   /help, /h            显示帮助
   /quit, /q            退出
@@ -874,6 +1208,23 @@ interactive_mode() {
                 ;;
             /status)
                 show_status
+                ;;
+            /statusbar)
+                render_status_bar
+                ;;
+            /network)
+                echo "检查网络状态..."
+                if check_connectivity; then
+                    echo -e "\033[32m✓ 网络已连接\033[0m"
+                    NETWORK_STATUS="connected"
+                else
+                    echo -e "\033[31m✗ 网络已断开\033[0m"
+                    NETWORK_STATUS="disconnected"
+                fi
+                ;;
+            /reconnect)
+                echo "手动尝试重连..."
+                handle_network_loss
                 ;;
             /config)
                 echo "当前配置:"
