@@ -9,6 +9,24 @@
 VERSION="1.1.0"
 PROGRAM_NAME="lx-music-shell"
 
+#==============================================================================
+# 颜色定义 (用于动画和输出)
+#==============================================================================
+NC='\033[0m'             # No Color (重置)
+BOLD='\033[1m'            # 加粗
+DIM='\033[2m'             # 暗色
+RED='\033[0;31m'          # 红色
+GREEN='\033[0;32m'        # 绿色
+YELLOW='\033[1;33m'       # 黄色
+BLUE='\033[0;34m'         # 蓝色
+MAGENTA='\033[0;35m'      # 洋红
+CYAN='\033[0;36m'         # 青色
+WHITE='\033[1;37m'        # 白色
+GRAY='\033[0;90m'         # 灰色
+
+#==============================================================================
+# 配置目录
+#==============================================================================
 # 配置目录
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/lx-music-shell"
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/lx-music-shell"
@@ -1132,25 +1150,300 @@ EOF
 }
 
 #==============================================================================
+# 开屏动画
+#==============================================================================
+
+# 检查终端能力
+init_terminal() {
+    # 检查是否支持颜色和光标控制
+    if [[ -t 1 ]]; then
+        USE_COLOR=true
+    else
+        USE_COLOR=false
+    fi
+}
+
+# 隐藏光标
+hide_cursor() {
+    printf '\033[?25l' 2>/dev/null || true
+}
+
+# 显示光标
+show_cursor() {
+    printf '\033[?25h' 2>/dev/null || true
+}
+
+# 移动光标到指定位置
+move_cursor() {
+    printf '\033[%d;%dH' "$1" "$2"
+}
+
+# 清屏并移动到顶部
+clear_screen() {
+    printf '\033[2J\033[H'
+}
+
+# 清除当前行
+clear_line() {
+    printf '\033[2K'
+}
+
+# 动画1: 加载旋转器 (spinner)
+show_spinner() {
+    local duration="${1:-2}"
+    local message="${2:-加载中}"
+    local frames=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+    local colors=("\033[36m" "\033[32m" "\033[33m" "\033[35m")
+    
+    local end_time=$(($(date +%s) + duration))
+    local i=0
+    
+    hide_cursor
+    
+    while [[ $(date +%s) -lt $end_time ]]; do
+        local frame="${frames[$((i % ${#frames[@]}))]}"
+        local color="${colors[$((i % ${#colors[@]}))]}"
+        
+        printf "\r${color}${frame}${NC} ${message}..."
+        sleep 0.08
+        ((i++))
+    done
+    
+    printf "\r${GREEN}✓${NC} ${message}\n"
+    show_cursor
+}
+
+# 动画2: 进度条加载
+show_progress() {
+    local duration="${1:-2}"
+    local message="${2:-正在初始化}"
+    local width=30
+    
+    hide_cursor
+    
+    local end_time=$(($(date +%s) + duration))
+    local total_steps=20
+    local step_duration=$(echo "scale=4; $duration / $total_steps" | bc 2>/dev/null || echo "0.1")
+    
+    for ((step=0; step<=total_steps; step++)); do
+        local percent=$((step * 100 / total_steps))
+        local filled=$((step * width / total_steps))
+        local remaining=$((width - filled))
+        
+        printf "\r  ${CYAN}["
+        printf "${GREEN}%${filled}s" '' | tr ' ' '█'
+        printf "${GRAY}%${remaining}s" '' | tr ' ' '░'
+        printf "${CYAN}]${NC} %3d%% ${message}" "$percent"
+        
+        sleep "$step_duration"
+    done
+    
+    printf "\r  ${GREEN}[$(printf '█%.0s' $(seq 1 $width))] 100%% ${message}${NC}\n"
+    show_cursor
+}
+
+# 动画3: 渐进式 Logo 闪现
+show_logo_reveal() {
+    hide_cursor
+    
+    # 逐行显示 Logo
+    local logo=(
+"    ╔═══════════════════════════════════════════════╗"
+"    ║                                                   ║"
+"    ║        ██╗     ██╗  ██╗███╗   ███╗               ║"
+"    ║        ██║     ██║  ██║████╗ ████║               ║"
+"    ║        ██║     ██║  ██║██╔████╔██║               ║"
+"    ║        ██║     ╚██╗██╔╝██║╚██╔╝██║               ║"
+"    ║        ███████╗ ╚███╔╝ ██║ ╚═╝ ██║               ║"
+"    ║        ╚══════╝  ╚══╝  ╚═╝     ╚═╝               ║"
+"    ║                                                   ║"
+"    ║       Terminal Music Player  v$VERSION              ║"
+"    ║                                                   ║"
+"    ╚═══════════════════════════════════════════════╝"
+)
+    
+    # 顶部动画
+    printf "\n\n\n\n"
+    
+    for line in "${logo[@]}"; do
+        printf "  ${CYAN}%s${NC}\n" "$line"
+        sleep 0.05
+    done
+    
+    show_cursor
+}
+
+# 动画4: 波形跳动 (音乐主题)
+show_wave_animation() {
+    local cycles="${1:-3}"
+    
+    hide_cursor
+    
+    printf "\n\n"
+    
+    for ((c=0; c<cycles; c++)); do
+        for ((i=0; i<8; i++)); do
+            printf "\r  ${CYAN}"
+            
+            local heights=(1 3 5 7 9 7 5 3)
+            for h in "${heights[@]}"; do
+                if [[ $((i % 2)) -eq 0 ]]; then
+                    printf "▁▂▃▄▅▆▇█"
+                else
+                    printf "█▇▆▅▄▃▂▁"
+                fi
+                printf "  "
+            done
+            
+            printf "${NC}"
+            sleep 0.1
+        done
+    done
+    
+    printf "\n"
+    show_cursor
+}
+
+# 动画5: 加载点动画
+show_loading_dots() {
+    local duration="${1:-2}"
+    local message="${2:-请稍候}"
+    
+    hide_cursor
+    
+    local end_time=$(($(date +%s) + duration))
+    local i=0
+    
+    while [[ $(date +%s) -lt $end_time ]]; do
+        local dots=$(printf '.%.0s' $(seq 1 $((i % 4 + 1))))
+        printf "\r  ${YELLOW}${message}${dots}${NC}   "
+        sleep 0.3
+        ((i++))
+    done
+    
+    printf "\r  ${GREEN}${message}${NC} 完成!\n"
+    show_cursor
+}
+
+# 动画6: 综合开场动画 (默认)
+show_splash_animation() {
+    # 保存光标位置
+    hide_cursor
+    
+    # 第1阶段: 清屏 + 显示标题框架
+    clear_screen
+    sleep 0.3
+    
+    # 第2阶段: 渐进显示 Logo
+    printf "\n\n\n"
+    
+    local title=(
+"   ${CYAN}╔═══════════════════════════════════════════════════╗${NC}"
+"   ${CYAN}║${NC}                                                   ${CYAN}║${NC}"
+"   ${CYAN}║${NC}        ${BOLD}${WHITE}██╗     ██╗  ██╗${NC}                       ${CYAN}║${NC}"
+"   ${CYAN}║${NC}        ${BOLD}${WHITE}██║     ██║  ██║${NC}                       ${CYAN}║${NC}"
+"   ${CYAN}║${NC}        ${BOLD}${WHITE}██║     ██║  ██║${NC}                       ${CYAN}║${NC}"
+"   ${CYAN}║${NC}        ${BOLD}${WHITE}██║     ╚██╗██╔╝${NC}                       ${CYAN}║${NC}"
+"   ${CYAN}║${NC}        ${BOLD}${WHITE}███████╗ ╚███╔╝ ${NC} ${MAGENTA}M U S I C${NC}              ${CYAN}║${NC}"
+"   ${CYAN}║${NC}        ${BOLD}${WHITE}╚══════╝  ╚══╝  ${NC} ${MAGENTA}S H E L L${NC}              ${CYAN}║${NC}"
+"   ${CYAN}║${NC}                                                   ${CYAN}║${NC}"
+"   ${CYAN}║${NC}            ${GRAY}Terminal Music Player${NC}                ${CYAN}║${NC}"
+"   ${CYAN}║${NC}                ${GRAY}v$VERSION${NC}                          ${CYAN}║${NC}"
+"   ${CYAN}║${NC}                                                   ${CYAN}║${NC}"
+"   ${CYAN}╚═══════════════════════════════════════════════════╝${NC}"
+)
+    
+    # 逐行淡入
+    for line in "${title[@]}"; do
+        printf "  %b\n" "$line"
+        sleep 0.06
+    done
+    
+    sleep 0.5
+    
+    # 第3阶段: 加载动画
+    printf "\n"
+    
+    # 加载旋转器
+    local spinner_frames=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+    local spinner_colors=("\033[36m" "\033[32m" "\033[33m" "\033[35m" "\033[31m" "\033[34m")
+    
+    printf "  ${CYAN}初始化${NC}  "
+    
+    for i in {1..15}; do
+        local frame="${spinner_frames[$((i % ${#spinner_frames[@]}))]}"
+        local color="${spinner_colors[$((i % ${#spinner_colors[@]}))]}"
+        printf "\r  ${CYAN}初始化${NC}  ${color}${frame}${NC}"
+        sleep 0.06
+    done
+    
+    printf "\r  ${GREEN}✓${NC} 初始化完成\n"
+    sleep 0.2
+    
+    # 检查依赖
+    printf "  ${CYAN}检查依赖${NC}  "
+    for i in {1..8}; do
+        printf "\r  ${CYAN}检查依赖${NC}  ${YELLOW}⠋${NC}"
+        sleep 0.05
+    done
+    printf "\r  ${GREEN}✓${NC} 检查依赖完成\n"
+    sleep 0.2
+    
+    # 加载源
+    printf "  ${CYAN}加载源配置${NC}  "
+    for i in {1..10}; do
+        printf "\r  ${CYAN}加载源配置${NC}  ${MAGENTA}⠿${NC}"
+        sleep 0.05
+    done
+    printf "\r  ${GREEN}✓${NC} 加载源配置完成\n"
+    sleep 0.2
+    
+    # 网络检查
+    printf "  ${CYAN}检查网络${NC}  "
+    for i in {1..6}; do
+        printf "\r  ${CYAN}检查网络${NC}  ${BLUE}⠼${NC}"
+        sleep 0.06
+    done
+    
+    # 实际检查网络
+    if check_connectivity 2>/dev/null; then
+        printf "\r  ${GREEN}✓${NC} 网络已连接\n"
+    else
+        printf "\r  ${YELLOW}⚠${NC} 网络不可用\n"
+    fi
+    sleep 0.3
+    
+    # 第4阶段: 欢迎信息
+    printf "\n"
+    printf "  ${MAGENTA}♪${NC} ${WHITE}欢迎使用 ${BOLD}LX-Music-Shell${NC}\n"
+    printf "  ${GRAY}└─ 输入 ${BOLD}/help${NC}${GRAY} 查看命令帮助${NC}\n"
+    printf "  ${GRAY}└─ 输入 ${BOLD}/test-sources${NC}${GRAY} 测试源连通性${NC}\n"
+    printf "  ${GRAY}└─ 输入 ${BOLD}/quit${NC}${GRAY} 退出程序${NC}\n"
+    printf "\n"
+    
+    show_cursor
+}
+
+#==============================================================================
 # 交互模式
 #==============================================================================
 interactive_mode() {
-    clear
-    echo -e "\033[36m"
-    echo ""
-    echo "   ╔═══════════════════════════════════════╗"
-    echo "   ║     LX-Music-Shell v$VERSION              ║"
-    echo "   ║  Terminal Music Player              ║"
-    echo "   ╚═══════════════════════════════════════╝"
-    echo -e "\033[0m"
-    echo "欢迎使用 LX-Music-Shell"
-    echo "输入 /help 查看命令帮助"
+    # 初始化终端
+    init_terminal
+    
+    # 显示开屏动画
+    show_splash_animation
+    
     echo ""
     
     while true; do
         echo -n -e "\033[32mlx>\033[0m "
-        read -r cmd args
-        
+        if ! read -r cmd args; then
+            # EOF (Ctrl+D) - 退出交互模式
+            echo ""
+            break
+        fi
+
         if [[ -z "$cmd" ]]; then
             continue
         fi
