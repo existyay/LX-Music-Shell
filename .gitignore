@@ -11,6 +11,7 @@ Thumbs.db
 # Build files
 *.tar.gz
 *.pkg.tar.zst
+*.tar.bz2
 
 # Config files (user-specific)
 .config/lx-music-shell/config
@@ -19,3 +20,16 @@ Thumbs.db
 
 # Test output
 *.log
+
+# AUR submission helpers (local-only tools)
+aur/PUBLISH_TO_AUR.md
+aur/submit-to-aur.sh
+aur/build-aur-package.sh
+aur/AUR_INFO_NEEDED.md
+aur/PKGBUILD.bak
+aur/.SRCINFO.local
+aur/PKGBUILD.local
+
+# Local PKGBUILD overrides (can be regenerated)
+aur/PKGBUILD.local
+aur/.SRCINFO.local
