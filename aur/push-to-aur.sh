@@ -71,6 +71,8 @@ cp "$SCRIPT_DIR/PKGBUILD" .
 cp "$SCRIPT_DIR/.SRCINFO" .
 cp "$SCRIPT_DIR/lx-music-shell.install" .
 cp "$SCRIPT_DIR/lx-music-shell.1" .
+cp "$SCRIPT_DIR/lx-music-sources.1" .
+cp "$SCRIPT_DIR/lx-music-shell-uninstall.1" .
 cp "$SCRIPT_DIR/lx-music-shell.bash" .
 cp "$SCRIPT_DIR/lx-music-shell.desktop" .
 
@@ -81,12 +83,20 @@ echo ""
 
 # 5. 提交
 git add PKGBUILD .SRCINFO lx-music-shell.install lx-music-shell.1 \
+        lx-music-sources.1 lx-music-shell-uninstall.1 \
         lx-music-shell.bash lx-music-shell.desktop
 
-git commit -m "Initial upload: lx-music-shell v1.1.0
+git commit -m "Update to lx-music-shell v1.1.1
 
 A pure shell terminal music player with multi-source support
-including auto-reconnect on network/bluetooth disconnection."
+including auto-reconnect on network/bluetooth disconnection.
+
+Improvements over v1.1.0:
+- Clean up all shellcheck warnings (0 errors, 0 warnings)
+- Add dedicated man pages for lx-music-sources and uninstaller
+- Add proper Maintainer field in PKGBUILD
+- Fix source filename uniqueness for namcap
+- Various code cleanups"
 
 # 6. 推送
 echo ""

@@ -5,7 +5,8 @@
 
 set -e
 
-VERSION="1.0.0"
+# shellcheck disable=SC2034  # 版本变量,供未来更新检查使用
+VERSION="1.1.1"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="${HOME}/.config/lx-music-shell"
 MAN_DIR="/usr/local/share/man/man1"
@@ -113,6 +114,7 @@ if [[ "$INSTALL_DIR" == "${HOME}/.local/bin" ]]; then
         {
             echo ""
             echo "# LX-Music-Shell"
+            # shellcheck disable=SC2016  # 字面值,会在用户的 shell rc 中展开
             echo 'export PATH="$HOME/.local/bin:$PATH"'
         } >> "$SHELL_RC"
         echo "  ✓ 添加 PATH 到 $SHELL_RC"

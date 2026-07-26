@@ -49,6 +49,7 @@ test_source() {
 # 尝试发现实际的搜索API
 discover_api() {
     local source_id="$1"
+    # shellcheck disable=SC2034  # 保留供将来 API 发现功能使用
     local source_url="$2"
     
     case "$source_id" in
@@ -111,7 +112,7 @@ for source_id in "${!SOURCES[@]}"; do
             fi
         fi
     else
-        echo "  \033[31m网站不可访问\033[0m"
+        printf "  \033[31m网站不可访问\033[0m\n"
         ((failed++))
     fi
     echo ""

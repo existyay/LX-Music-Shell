@@ -108,9 +108,9 @@ EOFSOURCES
     # Install man pages
     install -Dm644 aur/lx-music-shell.1 \
         "$pkgdir/usr/share/man/man1/lx-music-shell.1"
-    install -Dm644 aur/lx-music-shell.1 \
+    install -Dm644 aur/lx-music-sources.1 \
         "$pkgdir/usr/share/man/man1/lx-music-sources.1"
-    install -Dm644 aur/lx-music-shell.1 \
+    install -Dm644 aur/lx-music-shell-uninstall.1 \
         "$pkgdir/usr/share/man/man1/lx-music-shell-uninstall.1"
 
     # Install bash completion

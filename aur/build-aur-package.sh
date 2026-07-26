@@ -199,10 +199,14 @@ push_to_aur() {
     cp "$SRCINFO" .
     cp "$SCRIPT_DIR/lx-music-shell.install" .
     cp "$SCRIPT_DIR/lx-music-shell.1" .
+    cp "$SCRIPT_DIR/lx-music-sources.1" .
+    cp "$SCRIPT_DIR/lx-music-shell-uninstall.1" .
     cp "$SCRIPT_DIR/lx-music-shell.bash" .
     cp "$SCRIPT_DIR/lx-music-shell.desktop" .
 
-    git add PKGBUILD .SRCINFO lx-music-shell.install lx-music-shell.1 lx-music-shell.bash lx-music-shell.desktop
+    git add PKGBUILD .SRCINFO lx-music-shell.install lx-music-shell.1 \
+            lx-music-sources.1 lx-music-shell-uninstall.1 \
+            lx-music-shell.bash lx-music-shell.desktop
 
     if [[ -n "$(git status --porcelain)" ]]; then
         git commit -qm "Update AUR package: $AUR_PACKAGE v$PKG_VERSION"
