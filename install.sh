@@ -110,9 +110,11 @@ if [[ "$INSTALL_DIR" == "${HOME}/.local/bin" ]]; then
     fi
     
     if ! grep -q "export PATH=.*\.local/bin" "$SHELL_RC" 2>/dev/null; then
-        echo "" >> "$SHELL_RC"
-        echo "# LX-Music-Shell" >> "$SHELL_RC"
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$SHELL_RC"
+        {
+            echo ""
+            echo "# LX-Music-Shell"
+            echo 'export PATH="$HOME/.local/bin:$PATH"'
+        } >> "$SHELL_RC"
         echo "  ✓ 添加 PATH 到 $SHELL_RC"
     fi
 fi
