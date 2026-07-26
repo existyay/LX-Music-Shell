@@ -7,7 +7,6 @@
 
 # 版本信息
 VERSION="1.1.0"
-PROGRAM_NAME="lx-music-shell"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
@@ -23,8 +22,6 @@ trap 'on_exit' INT TERM
 #==============================================================================
 NC='\033[0m'             # No Color (重置)
 BOLD='\033[1m'            # 加粗
-DIM='\033[2m'             # 暗色
-RED='\033[0;31m'          # 红色
 GREEN='\033[0;32m'        # 绿色
 YELLOW='\033[1;33m'       # 黄色
 BLUE='\033[0;34m'         # 蓝色
@@ -48,8 +45,6 @@ mkdir -p "$CONFIG_DIR" "$DATA_DIR" "$CACHE_DIR"
 # 配置文件
 CONFIG_FILE="$CONFIG_DIR/config"
 SOURCES_FILE="$CONFIG_DIR/sources.list"
-COOKIES_DIR="$CONFIG_DIR/cookies"
-PLAYLIST_FILE="$CACHE_DIR/playlist.m3u"
 
 # 默认配置
 DEFAULT_PLAYER="mpv"
@@ -59,9 +54,7 @@ SEARCH_LIMIT=20
 # 播放器状态
 PLAYER_PID=""
 PLAYER_STATUS="stopped"
-PLAYER_BUFFERING="false"
 CURRENT_TRACK=""
-CURRENT_URL=""
 CURRENT_SOURCE="$DEFAULT_SOURCE"
 CURRENT_SOURCE_NAME=""
 PLAYLIST=()
@@ -73,7 +66,6 @@ VOLUME="${VOLUME:-80}"
 
 # 网络监控状态
 NETWORK_STATUS="connected"      # connected | disconnected | reconnecting
-LAST_CONNECTIVITY_CHECK=0
 NETWORK_CHECK_INTERVAL=3        # 秒
 RECONNECT_ATTEMPTS=0
 MAX_RECONNECT_ATTEMPTS=5
@@ -104,9 +96,13 @@ load_modules() {
     
     if [[ -n "$lib_path" ]]; then
         # 加载模块
+        # shellcheck disable=SC1091
         [[ -f "$lib_path/player.sh" ]] && source "$lib_path/player.sh"
+        # shellcheck disable=SC1091
         [[ -f "$lib_path/search.sh" ]] && source "$lib_path/search.sh"
+        # shellcheck disable=SC1091
         [[ -f "$lib_path/ui.sh" ]] && source "$lib_path/ui.sh"
+        # shellcheck disable=SC1091
         [[ -f "$lib_path/download.sh" ]] && source "$lib_path/download.sh"
     fi
 }
@@ -116,6 +112,7 @@ load_modules() {
 #==============================================================================
 load_config() {
     if [[ -f "$CONFIG_FILE" ]]; then
+        # shellcheck disable=SC1090
         source "$CONFIG_FILE"
     else
         save_config
@@ -162,6 +159,7 @@ EOF
 #==============================================================================
 load_sources() {
     if [[ -f "$SOURCES_FILE" ]]; then
+        # shellcheck disable=SC1090
         source "$SOURCES_FILE"
     fi
 }
@@ -210,9 +208,6 @@ network_watchdog() {
             continue
         fi
         
-        local now
-        now=$(date +%s)
-        
         if check_connectivity; then
             if [[ "$NETWORK_STATUS" == "disconnected" ]]; then
                 echo -e "\n\033[32m✓ 网络已恢复\033[0m"
@@ -220,7 +215,6 @@ network_watchdog() {
                 RECONNECT_ATTEMPTS=0
             fi
             NETWORK_STATUS="connected"
-            LAST_CONNECTIVITY_CHECK=$now
         else
             if [[ "$NETWORK_STATUS" == "connected" ]]; then
                 echo -e "\n\033[33m⚠ 网络中断，尝试重连...\033[0m"
@@ -235,7 +229,6 @@ network_watchdog() {
 handle_network_loss() {
     NETWORK_STATUS="disconnected"
     PLAYER_STATUS="buffering"
-    PLAYER_BUFFERING="true"
     
     # 启动重连循环
     local attempt=0
@@ -249,7 +242,6 @@ handle_network_loss() {
         if check_connectivity; then
             echo -e "\033[32m✓ 网络恢复，续播中...\033[0m"
             NETWORK_STATUS="connected"
-            PLAYER_BUFFERING="false"
             PLAYER_STATUS="playing"
             
             # 重新播放当前歌曲
@@ -304,7 +296,7 @@ do_play() {
     local track="${PLAYLIST[$index]}"
     
     # 解析歌曲信息 (格式: "序号|歌名|歌手|时长|URL")
-    IFS='|' read -r num name artist duration url <<< "$track"
+    IFS='|' read -r _ name artist duration url <<< "$track"
     
     if [[ -z "$url" ]] || [[ "$url" == "null" ]]; then
         echo -e "\033[33m提示: 该歌曲无可用播放链接\033[0m"
@@ -316,7 +308,6 @@ do_play() {
     do_stop
     
     CURRENT_TRACK="$name - $artist"
-    CURRENT_URL="$url"
     PLAYER_STATUS="playing"
     PLAYBACK_START_TIME=$(date +%s)
     
@@ -357,7 +348,6 @@ do_play() {
     (
         wait "$PLAYER_PID" 2>/dev/null
         # 播放器进程退出后
-        PLAYER_EXIT_CODE=$?
         if [[ "$PLAYER_STATUS" == "playing" ]] || [[ "$PLAYER_STATUS" == "buffering" ]]; then
             # 如果状态还在播放/缓冲，表示是意外中断
             if [[ "$NETWORK_STATUS" == "connected" ]]; then
@@ -646,7 +636,7 @@ show_playlist() {
     
     local i=0
     for track in "${PLAYLIST[@]}"; do
-        IFS='|' read -r num name artist duration url <<< "$track"
+        IFS='|' read -r _ name artist duration url <<< "$track"
         if [[ $i -eq $PLAYLIST_INDEX ]]; then
             echo -e "  \033[32m▶\033[0m $(printf '%2d' "$i") | $name | $artist | ${duration:---:--}"
         else
@@ -735,9 +725,6 @@ do_search_all() {
     for src in kugou kuwo netease qq migu; do
         echo ""
         echo -e "\033[1;34m>>> ${src^^} <<<\033[0m"
-        
-        # 清空临时播放列表
-        local temp_playlist=()
         
         case "$src" in
             kugou)
@@ -1166,11 +1153,7 @@ EOF
 # 检查终端能力
 init_terminal() {
     # 检查是否支持颜色和光标控制
-    if [[ -t 1 ]]; then
-        USE_COLOR=true
-    else
-        USE_COLOR=false
-    fi
+    true
 }
 
 # 隐藏光标
@@ -1214,12 +1197,12 @@ show_spinner() {
         local frame="${frames[$((i % ${#frames[@]}))]}"
         local color="${colors[$((i % ${#colors[@]}))]}"
         
-        printf '%b' "\r${color}${frame}${NC} ${message}..."
+        printf '%b %s' "\r${color}${frame}${NC}" "${message}..."
         sleep 0.08
         ((i++))
     done
     
-    printf '%b\n' "\r${GREEN}✓${NC} ${message}"
+    printf '%b %s\n' "\r${GREEN}✓${NC}" "${message}"
     show_cursor
 }
 
@@ -1242,14 +1225,14 @@ show_progress() {
         local remaining=$((width - filled))
         
         printf '%b' "\r  ${CYAN}["
-        printf "${GREEN}%${filled}s" '' | tr ' ' '█'
-        printf "${GRAY}%${remaining}s" '' | tr ' ' '░'
-        printf '%b %3d%% %s' "${CYAN}]${NC}" "$percent" "${message}"
+        printf '%*s' "$filled" '' | tr ' ' '█'
+        printf '%*s' "$remaining" '' | tr ' ' '░'
+        printf '%b %3d%% %s\n' "${CYAN}]${NC}" "$percent" "${message}"
         
         sleep "$step_duration"
     done
     
-    printf '%b\n' "\r  ${GREEN}[$(printf '█%.0s' $(seq 1 $width))] 100%% ${message}${NC}"
+    printf '%b %s\n' "\r  ${GREEN}[$(printf '█%.0s' $(seq 1 $width))] 100%% ${NC}" "${message}"
     show_cursor
 }
 
@@ -1300,7 +1283,7 @@ show_wave_animation() {
             printf '%b' "\r  ${CYAN}"
             
             local heights=(1 3 5 7 9 7 5 3)
-            for h in "${heights[@]}"; do
+            for _ in "${heights[@]}"; do
                 if [[ $((i % 2)) -eq 0 ]]; then
                     printf "▁▂▃▄▅▆▇█"
                 else
@@ -1370,7 +1353,7 @@ show_splash_animation() {
     
     # 逐行淡入
     for line in "${title[@]}"; do
-        printf "  %b\n" "$line"
+        printf '%b\n' "  ${line}"
         sleep 0.06
     done
     
@@ -1388,7 +1371,7 @@ show_splash_animation() {
     for i in {1..15}; do
         local frame="${spinner_frames[$((i % ${#spinner_frames[@]}))]}"
         local color="${spinner_colors[$((i % ${#spinner_colors[@]}))]}"
-        printf '%b' "\r  ${CYAN}初始化${NC}  ${color}${frame}${NC}"
+        printf '%b %s\n' "\r  ${CYAN}初始化${NC}" "${color}${frame}${NC}"
         sleep 0.06
     done
     
