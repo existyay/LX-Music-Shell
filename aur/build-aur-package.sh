@@ -142,7 +142,8 @@ validate() {
         errors=$((errors + 1))
     else
         local srcinfo_url expected_url
-        srcinfo_url=$(grep '^url = ' "$SRCINFO" | head -n 1 | sed 's/^url = //')
+        # .SRCINFO 中键以制表符缩进 ('\tkey = value')，不是行首
+        srcinfo_url=$(grep -E $'^\t*url = ' "$SRCINFO" | head -n 1 | sed $'s/^\t*url = //')
         expected_url="https://github.com/$GITHUB_USER/$GITHUB_REPO"
         if [[ "$srcinfo_url" == "$expected_url" ]]; then
             printf '%b\n' "${GREEN}  ✓ .SRCINFO URL 正确${NC}"
