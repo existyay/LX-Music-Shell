@@ -15,7 +15,7 @@ SRCINFO="$SCRIPT_DIR/.SRCINFO"
 GITHUB_USER="${AUR_GITHUB_USER:-existyay}"
 GITHUB_REPO="${AUR_GITHUB_REPO:-LX-Music-Shell}"
 AUR_PACKAGE="${AUR_PACKAGE:-lx-music-shell}"
-PKG_VERSION="${PKG_VERSION:-1.1.0}"
+PKG_VERSION="${PKG_VERSION:-1.1.1}"
 AUR_SSH_KEY="${AUR_SSH_KEY:-}"
 MAINTAINER_NAME="${AUR_MAINTAINER_NAME:-Demo User}"
 MAINTAINER_EMAIL="${AUR_MAINTAINER_EMAIL:-demo@localhost}"
@@ -44,7 +44,7 @@ usage() {
   AUR_MAINTAINER_NAME   Maintainer 姓名
   AUR_MAINTAINER_EMAIL  Maintainer 邮箱
   AUR_SSH_KEY           SSH 私钥路径
-  PKG_VERSION           包版本 (默认: 1.1.0)
+  PKG_VERSION           包版本 (默认: 1.1.1)
 USAGE
 }
 

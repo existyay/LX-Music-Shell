@@ -1,6 +1,6 @@
 # Maintainer: Demo User <demo@localhost>
 pkgname=lx-music-shell
-pkgver=1.1.0
+pkgver=1.1.1
 pkgrel=1
 pkgdesc="Terminal music player with multi-source support and auto-reconnect"
 arch=("any")
