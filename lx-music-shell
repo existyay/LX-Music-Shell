@@ -46,6 +46,8 @@ mkdir -p "$CONFIG_DIR" "$DATA_DIR" "$CACHE_DIR"
 CONFIG_FILE="$CONFIG_DIR/config"
 SOURCES_FILE="$CONFIG_DIR/sources.list"
 
+declare -A SOURCE_URLS=()
+
 # 默认配置
 DEFAULT_PLAYER="mpv"
 DEFAULT_SOURCE="kugou"
@@ -124,6 +126,9 @@ load_config() {
     SEARCH_LIMIT="${SEARCH_LIMIT:-20}"
     PLAY_MODE="${PLAY_MODE:-list}"
     VOLUME="${VOLUME:-80}"
+    AUTO_UPDATE_SOURCES="${AUTO_UPDATE_SOURCES:-true}"
+    UI_COLOR="${UI_COLOR:-true}"
+    AUTO_RECONNECT="${AUTO_RECONNECT:-true}"
 }
 
 save_config() {
@@ -132,25 +137,28 @@ save_config() {
 # 自动生成
 
 # 播放器后端 (mpv/mplayer/ffplay)
-PLAYER_BACKEND="$PLAYER_BACKEND"
+PLAYER_BACKEND="${PLAYER_BACKEND:-$DEFAULT_PLAYER}"
 
 # 默认音乐源
-DEFAULT_SOURCE="$DEFAULT_SOURCE"
+DEFAULT_SOURCE="${DEFAULT_SOURCE:-$DEFAULT_SOURCE}"
 
 # 搜索结果数量限制
-SEARCH_LIMIT="$SEARCH_LIMIT"
+SEARCH_LIMIT="${SEARCH_LIMIT:-20}"
 
 # 播放模式 (list/loop/single/random)
-PLAY_MODE="$PLAY_MODE"
+PLAY_MODE="${PLAY_MODE:-list}"
 
 # 音量 (0-100)
-VOLUME="$VOLUME"
+VOLUME="${VOLUME:-80}"
 
 # 自动更新源列表
 AUTO_UPDATE_SOURCES="${AUTO_UPDATE_SOURCES:-true}"
 
 # UI设置
 UI_COLOR="${UI_COLOR:-true}"
+
+# 自动重连
+AUTO_RECONNECT="${AUTO_RECONNECT:-true}"
 EOF
 }
 
@@ -158,10 +166,166 @@ EOF
 # 源配置管理
 #==============================================================================
 load_sources() {
+    SOURCE_URLS=()
+
     if [[ -f "$SOURCES_FILE" ]]; then
         # shellcheck disable=SC1090
         source "$SOURCES_FILE"
     fi
+
+    for var in $(compgen -v | grep '^SOURCE_' | sort); do
+        local key="${var#SOURCE_}"
+        local url="${!var}"
+        if [[ -n "$url" ]]; then
+            local lower_key="${key,,}"
+            SOURCE_URLS["$lower_key"]="$url"
+        fi
+    done
+}
+
+show_sources() {
+    echo ""
+    echo "========================================"
+    echo "       已配置音乐源"
+    echo "========================================"
+
+    if [[ ${#SOURCE_URLS[@]} -eq 0 ]]; then
+        echo "  (未检测到配置源，使用 /update-sources 生成默认源)"
+        return
+    fi
+
+    for name in $(printf '%s\n' "${!SOURCE_URLS[@]}" | sort); do
+        echo "  $name => ${SOURCE_URLS[$name]}"
+    done
+
+    echo ""
+    echo "当前默认源: $DEFAULT_SOURCE"
+    echo "使用 /source add <name> <url> 添加自定义源"
+    echo "使用 /source remove <name> 删除自定义源"
+}
+
+add_source() {
+    local name="${1,,}"
+    local url="$2"
+
+    if [[ -z "$name" ]] || [[ -z "$url" ]]; then
+        echo -e "\033[31m错误: 用法 /source add <名称> <URL>\033[0m"
+        return 1
+    fi
+
+    if [[ "$name" =~ [^a-z0-9_] ]]; then
+        echo -e "\033[31m错误: 源名称只能包含小写字母、数字和下划线\033[0m"
+        return 1
+    fi
+
+    local varname="SOURCE_${name^^}"
+    if grep -qE "^${varname}=" "$SOURCES_FILE" 2>/dev/null; then
+        echo -e "\033[33m警告: 源 '$name' 已存在，已更新 URL\033[0m"
+        sed -i "s|^${varname}=.*|${varname}=\"$url\"|" "$SOURCES_FILE"
+    else
+        echo "${varname}=\"$url\"" >> "$SOURCES_FILE"
+    fi
+    SOURCE_URLS["$name"]="$url"
+    eval "${varname}=\"$url\""
+    echo -e "\033[32m✓ 已添加源: $name\033[0m"
+}
+
+remove_source() {
+    local name="${1,,}"
+
+    if [[ -z "$name" ]]; then
+        echo -e "\033[31m错误: 用法 /source remove <名称>\033[0m"
+        return 1
+    fi
+
+    local varname="SOURCE_${name^^}"
+    if ! grep -qE "^${varname}=" "$SOURCES_FILE" 2>/dev/null; then
+        echo -e "\033[33m警告: 源 '$name' 不存在\033[0m"
+        return 1
+    fi
+
+    sed -i "/^${varname}=.*/d" "$SOURCES_FILE"
+    unset "SOURCE_URLS[$name]"
+    unset "${varname}"
+    echo -e "\033[32m✓ 已删除源: $name\033[0m"
+}
+
+format_custom_search_url() {
+    local query="$1"
+    local source="$2"
+    local limit="${3:-$SEARCH_LIMIT}"
+    local url_template="${SOURCE_URLS[$source]}"
+    local encoded_query
+    encoded_query=$(url_encode "$query")
+    local search_url
+
+    search_url="${url_template//\{\{query\}\}/$encoded_query}"
+    search_url="${search_url//\{\{limit\}\}/$limit}"
+
+    if [[ "$search_url" == "$url_template" ]]; then
+        if [[ "$search_url" == *\?* ]]; then
+            search_url="$search_url&q=$encoded_query&limit=$limit"
+        else
+            search_url="$search_url?q=$encoded_query&limit=$limit"
+        fi
+    fi
+
+    printf '%s' "$search_url"
+}
+
+search_custom_source() {
+    local query="$1"
+    local source="$2"
+    local limit="${3:-$SEARCH_LIMIT}"
+    local url_template="${SOURCE_URLS[$source]}"
+
+    if [[ -z "$query" ]] || [[ -z "$url_template" ]]; then
+        echo -e "\033[31m错误: 无效的自定义源搜索\033[0m"
+        return 1
+    fi
+
+    local search_url
+    search_url=$(format_custom_search_url "$query" "$source" "$limit")
+
+    echo -e "\033[33m使用自定义源 '$source' 搜索...\033[0m"
+    local resp
+    resp=$(curl -s --connect-timeout 10 "$search_url" 2>/dev/null)
+    if [[ -z "$resp" ]]; then
+        echo -e "\033[31m错误: 自定义源请求失败\033[0m"
+        return 1
+    fi
+
+    echo ""
+    echo "======== 自定义源响应预览 ========"
+    echo "${resp}" | head -n 20
+    echo "================================="
+    echo "提示: 自定义源结果不一定能自动解析播放链接。"
+}
+
+set_source() {
+    local action="$1"
+    shift
+
+    case "$action" in
+        list)
+            show_sources
+            ;;
+        add)
+            add_source "$@"
+            ;;
+        remove|rm|del)
+            remove_source "$1"
+            ;;
+        *)
+            local normalized="${action,,}"
+            if [[ -n "${SOURCE_URLS[$normalized]}" ]] || declare -f "search_$normalized" >/dev/null 2>&1; then
+                DEFAULT_SOURCE="$normalized"
+                echo -e "\033[32m已切换到源: $normalized\033[0m"
+            else
+                echo -e "\033[31m错误: 未知源 '$action'\033[0m"
+            fi
+            ;;
+    esac
 }
 
 #==============================================================================
@@ -676,40 +840,52 @@ do_search() {
     fi
     
     CURRENT_SOURCE="$source"
-    
+
     case "$source" in
         kugou)
             CURRENT_SOURCE_NAME="酷狗音乐"
             search_kugou "$query" "$limit"
+            return
             ;;
         kuwo)
             CURRENT_SOURCE_NAME="酷我音乐"
             search_kuwo "$query" "$limit"
+            return
             ;;
         netease)
             CURRENT_SOURCE_NAME="网易云音乐"
             search_netease "$query" "$limit"
+            return
             ;;
         qq)
             CURRENT_SOURCE_NAME="QQ音乐"
             search_qq "$query" "$limit"
+            return
             ;;
         migu)
             CURRENT_SOURCE_NAME="咪咕音乐"
             search_migu "$query" "$limit"
+            return
             ;;
         ximalaya)
             CURRENT_SOURCE_NAME="喜马拉雅"
             search_ximalaya "$query" "$limit"
+            return
             ;;
         all)
             do_search_all "$query" "$limit"
-            ;;
-        *)
-            echo -e "\033[31m错误: 不支持的源: $source\033[0m"
-            return 1
+            return
             ;;
     esac
+
+    if [[ -n "${SOURCE_URLS[$source]:-}" ]]; then
+        CURRENT_SOURCE_NAME="自定义源 ${source}"
+        search_custom_source "$query" "$source" "$limit"
+        return
+    fi
+
+    echo -e "\033[31m错误: 不支持的源: $source\033[0m"
+    return 1
 }
 
 do_search_all() {
@@ -1093,6 +1269,35 @@ show_status() {
     echo ""
 }
 
+show_panel() {
+    local panel_lines=(
+"  LX-Music-Shell 面板"
+""
+"  状态: $(status_icon) $PLAYER_STATUS"
+"  当前歌曲: ${CURRENT_TRACK:-无}"
+"  来源: ${CURRENT_SOURCE_NAME:-$CURRENT_SOURCE}"
+"  播放模式: $PLAY_MODE"
+"  音量: $VOLUME%"
+"  播放列表: ${#PLAYLIST[@]} 首"
+"  当前索引: $PLAYLIST_INDEX"
+""
+"  网络: $NETWORK_STATUS"
+"  自动重连: $([ "$AUTO_RECONNECT" = "true" ] && echo "启用" || echo "禁用")"
+"  重连尝试: $RECONNECT_ATTEMPTS/$MAX_RECONNECT_ATTEMPTS"
+""
+"  快捷命令: /search /play /pause /resume /next /prev /status /test-sources"
+)
+
+    if declare -f ui_draw_header >/dev/null 2>&1; then
+        ui_clear
+        ui_draw_header "LX-Music-Shell 面板"
+        ui_draw_box panel_lines
+        ui_draw_footer "输入 /quit 退出 | /help 查看命令"
+    else
+        printf '%s\n' "${panel_lines[@]}"
+    fi
+}
+
 #==============================================================================
 # 显示帮助
 #==============================================================================
@@ -1120,6 +1325,9 @@ show_help() {
 搜索播放:
   /search [关键词], /s 搜索音乐
   /source [源名]       切换音乐源
+  /source list         列出已配置源
+  /source add <name> <url>  添加自定义源
+  /source remove <name>   删除自定义源
 
 音乐源: kugou, kuwo, netease, qq, migu, ximalaya, all
 
@@ -1128,6 +1336,7 @@ show_help() {
   /update-sources      更新源配置
   /import-source <f>   导入源配置
   /status              显示状态
+  /panel               显示 UI 面板
   /statusbar           显示实时状态栏
   /network             检查网络状态
   /reconnect           手动重连
@@ -1436,15 +1645,20 @@ interactive_mode() {
     
     while true; do
         echo -n -e "\033[32mlx>\033[0m "
-        if ! read -r cmd args; then
+        local line
+        if ! IFS= read -r line; then
             # EOF (Ctrl+D) - 退出交互模式
             echo ""
             break
         fi
 
-        if [[ -z "$cmd" ]]; then
+        if [[ -z "$line" ]]; then
             continue
         fi
+
+        local cmd="${line%%[[:space:]]*}"
+        local rest="${line#*"$cmd"}"
+        rest="${rest# }"
         
         # 解析并执行命令
         case "$cmd" in
@@ -1452,10 +1666,10 @@ interactive_mode() {
                 show_help
                 ;;
             /search|/s)
-                do_search "$args"
+                do_search "$rest"
                 ;;
             /play|/p)
-                do_play "$args"
+                do_play "$rest"
                 ;;
             /pause)
                 do_pause
@@ -1479,14 +1693,13 @@ interactive_mode() {
                 clear_playlist
                 ;;
             /mode)
-                set_play_mode "$args"
+                set_play_mode "$rest"
                 ;;
             /volume|/v)
-                set_volume "$args"
+                set_volume "$rest"
                 ;;
             /source|/src)
-                DEFAULT_SOURCE="$args"
-                echo "已切换到: $args"
+                set_source "$rest"
                 ;;
             /test-sources)
                 test_all_sources
@@ -1495,10 +1708,13 @@ interactive_mode() {
                 fetch_source_api
                 ;;
             /import-source)
-                import_source "$args"
+                import_source "$rest"
                 ;;
             /status)
                 show_status
+                ;;
+            /panel)
+                show_panel
                 ;;
             /statusbar)
                 render_status_bar
@@ -1532,7 +1748,7 @@ interactive_mode() {
                 ;;
             *)
                 # 非命令视为搜索
-                do_search "$cmd $args"
+                do_search "$line"
                 ;;
         esac
     done
@@ -1551,6 +1767,9 @@ command_mode() {
             ;;
         test-sources|--test-sources)
             test_all_sources
+            ;;
+        source|--source)
+            set_source "$@"
             ;;
         update-sources|--update-sources)
             fetch_source_api
@@ -1589,4 +1808,6 @@ main() {
     fi
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
