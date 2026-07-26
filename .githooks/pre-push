@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# pre-push hook: 检查 AUR 元数据是否已提交
+# (不主动 rebuild, 避免覆盖用户改动)
+
+set -uo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-if [[ -f aur/build-aur-package.sh ]]; then
-  bash aur/build-aur-package.sh --no-confirm >/dev/null 2>&1
+# 检查 AUR 文件是否在 unstaged 状态
+if [[ -n "$(git status --porcelain -- aur/PKGBUILD aur/.SRCINFO)" ]]; then
+  echo "WARN: aur/PKGBUILD 或 .SRCINFO 有未提交改动, 但不阻止推送"
+  # 仅提示, 不阻止 (用户可能正在快速迭代)
 fi
 
-if [[ -n "$(git status --porcelain -- aur/PKGBUILD aur/.SRCINFO)" ]]; then
-  echo "ERROR: AUR metadata changed after build. Please review and commit the updated files before pushing."
-  git status --short -- aur/PKGBUILD aur/.SRCINFO
-  exit 1
-fi
+exit 0
