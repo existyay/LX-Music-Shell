@@ -1,0 +1,53 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.idea/
+
+# Build files
+*.tar.gz
+*.pkg.tar.zst
+*.tar.bz2
+
+# Config files (user-specific)
+.config/lx-music-shell/config
+.config/lx-music-shell/sources.list
+.cache/lx-music-shell/
+
+# Test output
+*.log
+
+# Security: SSH keys and credentials
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+id_dsa*
+id_ecdsa*
+authorized_keys
+known_hosts
+*.gpg
+*.asc
+.env
+.env.*
+credentials*
+secrets*
+*.secret
+*token*
+*password*
+
+# AUR submission helpers (local-only tools)
+aur/PUBLISH_TO_AUR.md
+aur/submit-to-aur.sh
+aur/build-aur-package.sh
+aur/AUR_INFO_NEEDED.md
+aur/PKGBUILD.bak
+aur/.SRCINFO.local
+aur/PKGBUILD.local
+aur/push-to-aur.sh

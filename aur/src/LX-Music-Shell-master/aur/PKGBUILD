@@ -59,7 +59,7 @@ check() {
 }
 
 package() {
-    cd "$srcdir/LX-Music-Shell-master"
+    cd "$srcdir/LX-Music-Shell-$pkgver"
 
     # Install main executable
     install -Dm755 lx-music-shell "$pkgdir/usr/bin/lx-music-shell"

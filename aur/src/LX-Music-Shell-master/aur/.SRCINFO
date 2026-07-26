@@ -3,10 +3,8 @@ pkgbase = lx-music-shell
 	pkgver = 1.1.0
 	pkgrel = 1
 	url = https://github.com/existyay/LX-Music-Shell
-	install = lx-music-shell.install
 	arch = any
 	license = MIT
-	checkdepends = shellcheck
 	depends = bash>=4.4
 	depends = coreutils
 	depends = curl
@@ -27,9 +25,11 @@ pkgbase = lx-music-shell
 	optdepends = pipewire: PipeWire audio system support
 	optdepends = pulseaudio: PulseAudio audio system support
 	optdepends = wireless_tools: WiFi connection monitoring
+	checkdepends = shellcheck
 	backup = etc/skel/.config/lx-music-shell/config
 	backup = etc/skel/.config/lx-music-shell/sources.list
-	source = lx-music-shell-source-v1.1.0.tar.gz::https://github.com/existyay/LX-Music-Shell/archive/refs/tags/v1.1.0.tar.gz
+	options = !strip
+	source = https://github.com/existyay/LX-Music-Shell/archive/refs/tags/v1.1.0.tar.gz
 	sha256sums = SKIP
 
 pkgname = lx-music-shell
