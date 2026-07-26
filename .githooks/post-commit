@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# post-commit hook: 仅做信息性提示
+# 注意: 不主动调用 build-aur-package.sh,避免覆盖已 commit 的 PKGBUILD/版本信息
+# 开发者应手动运行 aur/build-aur-package.sh 并 commit 结果
+
+set -uo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-if [[ -f aur/build-aur-package.sh ]]; then
-  bash aur/build-aur-package.sh --no-confirm >/dev/null 2>&1 || true
-fi
+# 只做提示,不修改任何文件
+exit 0

@@ -15,10 +15,10 @@ SRCINFO="$SCRIPT_DIR/.SRCINFO"
 GITHUB_USER="${AUR_GITHUB_USER:-existyay}"
 GITHUB_REPO="${AUR_GITHUB_REPO:-LX-Music-Shell}"
 AUR_PACKAGE="${AUR_PACKAGE:-lx-music-shell}"
-PKG_VERSION="${PKG_VERSION:-1.1.1}"
+PKG_VERSION="${PKG_VERSION:-2.0.0}"
 AUR_SSH_KEY="${AUR_SSH_KEY:-}"
-MAINTAINER_NAME="${AUR_MAINTAINER_NAME:-Demo User}"
-MAINTAINER_EMAIL="${AUR_MAINTAINER_EMAIL:-demo@localhost}"
+MAINTAINER_NAME="${AUR_MAINTAINER_NAME:-existyay}"
+MAINTAINER_EMAIL="${AUR_MAINTAINER_EMAIL:-liujam826@gmail.com}"
 
 print_header() {
     printf '%b\n' "${BLUE}========================================${NC}"
@@ -54,7 +54,7 @@ prompt_user_input() {
     if [[ -z "${MAINTAINER_NAME:-}" ]]; then
         printf 'Maintainer 姓名 [默认: Demo User]: '
         read -r MAINTAINER_NAME
-        MAINTAINER_NAME="${MAINTAINER_NAME:-Demo User}"
+        MAINTAINER_NAME="${MAINTAINER_NAME:-existyay}"
     fi
 
     if [[ -z "${MAINTAINER_EMAIL:-}" ]]; then
