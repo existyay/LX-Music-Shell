@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+if [[ -f aur/build-aur-package.sh ]]; then
+  bash aur/build-aur-package.sh --no-confirm >/dev/null 2>&1 || true
+fi

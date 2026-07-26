@@ -46,6 +46,9 @@ secrets*
 # Local AUR working copies and build outputs
 aur/lx-music-shell-git/
 aur/LX-Music-Shell-*.tar.gz
+aur/*.pkg.tar.zst
+aur/*.tar.gz
+aur/PKGBUILD.bak
 aur/pkg/
 aur/src/
 

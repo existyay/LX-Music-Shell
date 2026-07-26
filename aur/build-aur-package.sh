@@ -167,6 +167,7 @@ push_to_aur() {
     local ssh_cmd="ssh"
     if [[ -n "${AUR_SSH_KEY:-}" ]]; then
         ssh_cmd="ssh -i $AUR_SSH_KEY"
+        export GIT_SSH_COMMAND="ssh -i '$AUR_SSH_KEY' -o StrictHostKeyChecking=no"
     fi
 
     printf '%s\n' "测试 SSH 连接到 AUR..."
