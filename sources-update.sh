@@ -49,9 +49,7 @@ test_source() {
 # 尝试发现实际的搜索API
 discover_api() {
     local source_id="$1"
-    # shellcheck disable=SC2034  # 保留供将来 API 发现功能使用
-    local source_url="$2"
-    
+
     case "$source_id" in
         kugou)
             # 酷狗音乐搜索API
@@ -103,7 +101,7 @@ for source_id in "${!SOURCES[@]}"; do
             ((success++))
         else
             echo "  尝试发现替代API..."
-            discovered=$(discover_api "$source_id" "$site_url")
+            discovered=$(discover_api "$source_id")
             if [[ -n "$discovered" ]]; then
                 echo "  发现新API: $discovered"
                 ((success++))

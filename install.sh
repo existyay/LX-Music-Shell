@@ -6,7 +6,7 @@
 set -e
 
 # shellcheck disable=SC2034  # 版本变量,供未来更新检查使用
-VERSION="1.1.1"
+VERSION="2.0.0"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="${HOME}/.config/lx-music-shell"
 MAN_DIR="/usr/local/share/man/man1"
@@ -98,10 +98,12 @@ EOF
 fi
 
 # 安装 man 页面
-if [[ -f "$SCRIPT_DIR/aur/lx-music-shell.1" ]]; then
-    install -Dm644 "$SCRIPT_DIR/aur/lx-music-shell.1" "$MAN_DIR/lx-music-shell.1"
-    echo "  ✓ man 页面 -> $MAN_DIR/lx-music-shell.1"
-fi
+for manpage in lx-music-shell.1 lx-music-sources.1 lx-music-shell-uninstall.1; do
+    if [[ -f "$SCRIPT_DIR/aur/$manpage" ]]; then
+        install -Dm644 "$SCRIPT_DIR/aur/$manpage" "$MAN_DIR/$manpage"
+        echo "  ✓ man 页面 -> $MAN_DIR/$manpage"
+    fi
+done
 
 # 设置 PATH（如果是用户级安装）
 if [[ "$INSTALL_DIR" == "${HOME}/.local/bin" ]]; then

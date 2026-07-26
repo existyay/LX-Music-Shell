@@ -2,11 +2,20 @@
 #==============================================================================
 # LX-Music-Shell - 终端音乐播放器
 # 基于 LX-Music-Desktop 和 go-music-fox 设计
-# 版本: 1.1.1
+# 版本: 2.0.0
+#
+# 支持两种 UI 模式:
+#   1) CLI 模式 (默认): 命令行交互 (向后兼容 v1.x)
+#   2) TUI 模式 (--tui): 图形化分栏界面 + 键盘/鼠标
+#
+# TUI 模式会检测终端能力自动启用:
+#   - 终端列数 >= 60 且 行数 >= 20 -> 启用 TUI
+#   - kitty/iTerm/sixel -> 封面图显示
+#   - SGR 1006 鼠标 -> 鼠标点选
 #==============================================================================
 
 # 版本信息
-VERSION="1.1.1"
+VERSION="2.0.0"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
@@ -14,8 +23,14 @@ on_exit() {
     if declare -f do_stop >/dev/null 2>&1; then
         do_stop >/dev/null 2>&1 || true
     fi
+    # 恢复终端状态 (TUI 模式可能改动了)
+    if [[ "${LXMS_TUI_ACTIVE:-0}" == "1" ]]; then
+        input_disable_mouse 2>/dev/null || true
+        tui_cleanup 2>/dev/null || true
+        stty sane 2>/dev/null || true
+    fi
 }
-trap 'on_exit' INT TERM
+trap 'on_exit' INT TERM EXIT
 
 #==============================================================================
 # 颜色定义 (用于动画和输出)
@@ -81,9 +96,9 @@ PLAYBACK_START_TIME=0
 
 # 加载模块
 load_modules() {
-    # 优先使用安装目录的库
+    # 加载可选的 UI 辅助库 (如果存在)
     local lib_path
-    
+
     # 尝试多个可能的库目录
     for path in \
         "$(dirname "$0")/lib" \
@@ -95,17 +110,50 @@ load_modules() {
             break
         fi
     done
-    
+
     if [[ -n "$lib_path" ]]; then
-        # 加载模块
+        # shellcheck disable=SC1091  # UI 辅助库可能不存在
+        [[ -f "$lib_path/ui.sh" ]] && source "$lib_path/ui.sh"
+        # 保留 player.sh / search.sh / download.sh 为未来插件预留位置
         # shellcheck disable=SC1091
         [[ -f "$lib_path/player.sh" ]] && source "$lib_path/player.sh"
         # shellcheck disable=SC1091
         [[ -f "$lib_path/search.sh" ]] && source "$lib_path/search.sh"
         # shellcheck disable=SC1091
-        [[ -f "$lib_path/ui.sh" ]] && source "$lib_path/ui.sh"
-        # shellcheck disable=SC1091
         [[ -f "$lib_path/download.sh" ]] && source "$lib_path/download.sh"
+
+        # v2.0 新增 TUI 模块
+        if [[ -f "$lib_path/capability.sh" ]]; then
+            # shellcheck disable=SC1091
+            source "$lib_path/capability.sh"
+            LXMS_UI_CAPABILITY_AVAILABLE=1
+        fi
+        if [[ -f "$lib_path/input.sh" ]]; then
+            # shellcheck disable=SC1091
+            source "$lib_path/input.sh"
+        fi
+        if [[ -f "$lib_path/tui.sh" ]]; then
+            # shellcheck disable=SC1091
+            source "$lib_path/tui.sh"
+            LXMS_UI_TUI_AVAILABLE=1
+        fi
+    fi
+
+    # 加载音乐源 (v2.0)
+    local source_dir="$(dirname "$0")/sources"
+    if [[ ! -d "$source_dir" ]]; then
+        source_dir="/usr/share/lx-music-shell/sources"
+    fi
+    if [[ -d "$source_dir" ]]; then
+        # shellcheck disable=SC1091
+        [[ -f "$source_dir/_base.sh" ]] && source "$source_dir/_base.sh"
+        for src_file in "$source_dir"/*.sh; do
+            [[ -f "$src_file" ]] || continue
+            [[ "$(basename "$src_file")" == "_base.sh" ]] && continue
+            # shellcheck disable=SC1091
+            source "$src_file"
+        done
+        LXMS_SOURCES_AVAILABLE=1
     fi
 }
 
@@ -122,7 +170,7 @@ load_config() {
     
     # 设置默认值
     PLAYER_BACKEND="${PLAYER_BACKEND:-$DEFAULT_PLAYER}"
-    DEFAULT_SOURCE="${DEFAULT_SOURCE:-$DEFAULT_SOURCE}"
+    DEFAULT_SOURCE="${DEFAULT_SOURCE:-kugou}"
     SEARCH_LIMIT="${SEARCH_LIMIT:-20}"
     PLAY_MODE="${PLAY_MODE:-list}"
     VOLUME="${VOLUME:-80}"
@@ -140,7 +188,7 @@ save_config() {
 PLAYER_BACKEND="${PLAYER_BACKEND:-$DEFAULT_PLAYER}"
 
 # 默认音乐源
-DEFAULT_SOURCE="${DEFAULT_SOURCE:-$DEFAULT_SOURCE}"
+DEFAULT_SOURCE="${DEFAULT_SOURCE:-kugou}"
 
 # 搜索结果数量限制
 SEARCH_LIMIT="${SEARCH_LIMIT:-20}"
@@ -215,6 +263,12 @@ add_source() {
 
     if [[ "$name" =~ [^a-z0-9_] ]]; then
         echo -e "\033[31m错误: 源名称只能包含小写字母、数字和下划线\033[0m"
+        return 1
+    fi
+
+    # 验证 URL 格式，防止意外的恶意输入
+    if [[ ! "$url" =~ ^https?:// ]]; then
+        echo -e "\033[31m错误: URL 必须以 http:// 或 https:// 开头\033[0m"
         return 1
     fi
 
@@ -393,32 +447,29 @@ network_watchdog() {
 handle_network_loss() {
     NETWORK_STATUS="disconnected"
     PLAYER_STATUS="buffering"
-    
+
     # 启动重连循环
-    local attempt=0
-    
-    while [[ $attempt -lt $MAX_RECONNECT_ATTEMPTS ]]; do
-        RECONNECT_ATTEMPTS=$((attempt + 1))
-        
-        echo -e "\033[36m重连尝试 $((attempt + 1))/$MAX_RECONNECT_ATTEMPTS...\033[0m"
+    local attempt
+    for attempt in $(seq 1 "$MAX_RECONNECT_ATTEMPTS"); do
+        RECONNECT_ATTEMPTS=$attempt
+
+        printf '\033[36m重连尝试 %d/%s...\033[0m\n' "$attempt" "$MAX_RECONNECT_ATTEMPTS"
         sleep "$RECONNECT_DELAY"
-        
+
         if check_connectivity; then
-            echo -e "\033[32m✓ 网络恢复，续播中...\033[0m"
+            printf '\033[32m✓ 网络恢复，续播中...\033[0m\n'
             NETWORK_STATUS="connected"
             PLAYER_STATUS="playing"
-            
+
             # 重新播放当前歌曲
             if [[ $PLAYLIST_INDEX -ge 0 ]] && [[ $PLAYLIST_INDEX -lt ${#PLAYLIST[@]} ]]; then
                 do_play "$PLAYLIST_INDEX" --no-message
             fi
             return 0
         fi
-        
-        attempt=$((attempt + 1))
     done
-    
-    echo -e "\033[31m✗ 重连失败，播放已停止\033[0m"
+
+    printf '\033[31m✗ 重连失败 (已尝试 %s 次), 播放已停止\033[0m\n' "$MAX_RECONNECT_ATTEMPTS"
     do_stop
     return 1
 }
@@ -510,7 +561,10 @@ do_play() {
     
     # 后台监控播放器退出 (非阻塞)
     (
-        wait "$PLAYER_PID" 2>/dev/null
+        # 验证 PLAYER_PID 是数字，避免空值传给 wait
+        if [[ -n "$PLAYER_PID" ]] && [[ "$PLAYER_PID" =~ ^[0-9]+$ ]]; then
+            wait "$PLAYER_PID" 2>/dev/null
+        fi
         # 播放器进程退出后
         if [[ "$PLAYER_STATUS" == "playing" ]] || [[ "$PLAYER_STATUS" == "buffering" ]]; then
             # 如果状态还在播放/缓冲，表示是意外中断
@@ -966,10 +1020,11 @@ url_encode() {
 search_kugou() {
     local query="$1"
     local limit="${2:-20}"
-    
+
     echo -e "\033[33m使用酷狗音乐搜索...\033[0m"
-    
-    # 使用模拟数据
+    echo -e "\033[2m  (注: 酷狗 API 受限于签名验证,当前返回演示数据)\033[0m"
+
+    # 使用模拟数据 (酷狗 API 需要签名验证,纯 shell 难以实现)
     search_mock "kugou" "$query" "$limit"
 }
 
@@ -977,8 +1032,9 @@ search_kugou() {
 search_kuwo() {
     local query="$1"
     local limit="${2:-20}"
-    
+
     echo -e "\033[33m使用酷我音乐搜索...\033[0m"
+    echo -e "\033[2m  (注: 酷我 API 需要登录 cookie,当前返回演示数据)\033[0m"
     search_mock "kuwo" "$query" "$limit"
 }
 
@@ -986,8 +1042,9 @@ search_kuwo() {
 search_qq() {
     local query="$1"
     local limit="${2:-20}"
-    
+
     echo -e "\033[33m使用QQ音乐搜索...\033[0m"
+    echo -e "\033[2m  (注: QQ 音乐 API 需要 vkey 签名,当前返回演示数据)\033[0m"
     search_mock "qq" "$query" "$limit"
 }
 
@@ -995,8 +1052,9 @@ search_qq() {
 search_migu() {
     local query="$1"
     local limit="${2:-20}"
-    
+
     echo -e "\033[33m使用咪咕音乐搜索...\033[0m"
+    echo -e "\033[2m  (注: 咪咕 API 需要特殊请求头,当前返回演示数据)\033[0m"
     search_mock "migu" "$query" "$limit"
 }
 
@@ -1004,8 +1062,9 @@ search_migu() {
 search_ximalaya() {
     local query="$1"
     local limit="${2:-20}"
-    
+
     echo -e "\033[33m使用喜马拉雅搜索...\033[0m"
+    echo -e "\033[2m  (注: 喜马拉雅 API 需加密参数,当前返回演示数据)\033[0m"
     search_mock "ximalaya" "$query" "$limit"
 }
 
@@ -1038,20 +1097,26 @@ search_netease() {
     echo "----------------------------------------"
     echo "  #  | 歌曲                      | 歌手           | 时长"
     echo "----------------------------------------"
-    
+
     local i=1
     # 简单解析JSON中的歌曲信息
-    echo "$resp" | grep -oP '"name":"[^"]*"' | head -n "$limit" | \
-        while read -r line; do
+    # 使用 process substitution 以避免子 shell 中变量不传回的问题
+    local song_names
+    song_names=$(echo "$resp" | grep -oP '"name":"[^"]*"' | head -n "$limit")
+    if [[ -z "$song_names" ]]; then
+        echo "  (未能解析到歌曲名)"
+    else
+        while IFS= read -r line; do
             local name
             name=$(echo "$line" | sed 's/"name":"//' | sed 's/"$//')
             local artist="未知歌手"
             local duration="03:30"
             add_to_playlist "$i|$name|$artist|$duration|null"
-            echo "  $(printf '%2d' "$i")  | $name | $artist | $duration"
-            ((i++))
-        done
-    
+            printf "  %2d  | %s | %s | %s\n" "$i" "$name" "$artist" "$duration"
+            i=$((i + 1))
+        done <<< "$song_names"
+    fi
+
     echo "----------------------------------------"
     echo ""
     echo "提示: 输入 /play <序号> 开始播放"
@@ -1359,10 +1424,10 @@ EOF
 # 开屏动画
 #==============================================================================
 
-# 检查终端能力
+# 检查终端能力 (保留以供未来扩展使用;当前为 no-op)
 init_terminal() {
-    # 检查是否支持颜色和光标控制
-    true
+    # 占位函数 - 检查终端能力
+    :  # 显式 no-op
 }
 
 # 隐藏光标
@@ -1644,7 +1709,7 @@ interactive_mode() {
     echo ""
     
     while true; do
-        echo -n -e "\033[32mlx>\033[0m "
+        printf '%b' "\033[32mlx>\033[0m "
         local line
         if ! IFS= read -r line; then
             # EOF (Ctrl+D) - 退出交互模式
@@ -1659,6 +1724,13 @@ interactive_mode() {
         local cmd="${line%%[[:space:]]*}"
         local rest="${line#*"$cmd"}"
         rest="${rest# }"
+
+        # 将 rest 拆分为参数数组,供需要多参数的命令使用
+        local -a rest_args
+        if [[ -n "$rest" ]]; then
+            # shellcheck disable=SC2206  # 简单单词分割,不需要引号保留
+            rest_args=($rest)
+        fi
         
         # 解析并执行命令
         case "$cmd" in
@@ -1666,10 +1738,10 @@ interactive_mode() {
                 show_help
                 ;;
             /search|/s)
-                do_search "$rest"
+                do_search "${rest_args[@]:-}"
                 ;;
             /play|/p)
-                do_play "$rest"
+                do_play "${rest_args[@]:-}"
                 ;;
             /pause)
                 do_pause
@@ -1693,13 +1765,13 @@ interactive_mode() {
                 clear_playlist
                 ;;
             /mode)
-                set_play_mode "$rest"
+                set_play_mode "${rest_args[@]:-}"
                 ;;
             /volume|/v)
-                set_volume "$rest"
+                set_volume "${rest_args[@]:-}"
                 ;;
             /source|/src)
-                set_source "$rest"
+                set_source "${rest_args[@]:-}"
                 ;;
             /test-sources)
                 test_all_sources
@@ -1708,7 +1780,7 @@ interactive_mode() {
                 fetch_source_api
                 ;;
             /import-source)
-                import_source "$rest"
+                import_source "${rest_args[@]:-}"
                 ;;
             /status)
                 show_status
@@ -1794,17 +1866,161 @@ command_mode() {
 #==============================================================================
 # 主程序入口
 #==============================================================================
+#==============================================================================
+# TUI 模式 (v2.0 新增)
+#==============================================================================
+interactive_mode_tui() {
+    # 检测终端能力
+    if [[ "${LXMS_UI_CAPABILITY_AVAILABLE:-0}" != "1" ]]; then
+        echo "TUI 模块未加载,退回 CLI"
+        interactive_mode
+        return
+    fi
+
+    # 应用用户配置 (UI_TUI/UI_MOUSE)
+    capability_apply_config "$CONFIG_FILE"
+    detect_capability
+
+    # 检测是否适合开启 TUI
+    if [[ "${LXMS_FORCE_TUI:-0}" != "1" ]]; then
+        echo "终端能力不足或 UI_TUI=off,使用 CLI 模式"
+        interactive_mode
+        return
+    fi
+
+    LXMS_TUI_ACTIVE=1
+    LXMS_VERSION="v$VERSION"
+    LXMS_NETWORK="$NETWORK_STATUS"
+    LXMS_VOLUME="${VOLUME:-80}"
+
+    # 启用鼠标 (如果支持)
+    if supports_mouse; then
+        input_enable_mouse
+    fi
+
+    # 隐藏光标,进入备屏
+    printf '%s' "$TUI_HIDE_CURSOR"
+
+    # 主循环
+    local running=1
+    while [[ $running -eq 1 ]]; do
+        # 渲染界面
+        tui_render
+
+        # 读取事件 (非阻塞)
+        if ! input_read_event 0.2; then
+            # input_read_event 失败 (可能是 EOF)
+            # 检测 stdin 是否仍可读
+            if ! read -t 0 -r _ 2>/dev/null; then
+                # 真正 EOF,退出 TUI
+                break
+            fi
+            continue
+        fi
+        local ev_type="${EVENT_TYPE:-0}"
+
+        case "$ev_type" in
+            "$EVENT_KEY_QUIT" | "$EVENT_KEY_ESC")
+                running=0
+                ;;
+            "$EVENT_KEY_UP")
+                LXMS_SELECTED_INDEX=$(( ${LXMS_SELECTED_INDEX:-0} - 1 ))
+                [[ ${LXMS_SELECTED_INDEX} -lt 0 ]] && LXMS_SELECTED_INDEX=0
+                ;;
+            "$EVENT_KEY_DOWN")
+                local n=${#LXMS_PLAYLIST[@]:-0}
+                LXMS_SELECTED_INDEX=$(( ${LXMS_SELECTED_INDEX:-0} + 1 ))
+                [[ ${LXMS_SELECTED_INDEX} -ge $n ]] && LXMS_SELECTED_INDEX=$((n - 1))
+                ;;
+            "$EVENT_KEY_ENTER")
+                # 在 CLI 模式中播放
+                LXMS_PLAYING_INDEX=${LXMS_SELECTED_INDEX:-0}
+                do_play "${LXMS_SELECTED_INDEX:-0}"
+                ;;
+        esac
+    done
+
+    # 退出清理
+    if supports_mouse; then
+        input_disable_mouse
+    fi
+    tui_cleanup
+    LXMS_TUI_ACTIVE=0
+    printf '\n'
+}
+
+#==============================================================================
+# 命令行入口 (v2.0)
+#==============================================================================
 main() {
     # 加载配置和模块
     load_config
     load_sources
     load_modules
-    
+
+    # 应用源框架配置 (音质等)
+    if [[ "${LXMS_SOURCES_AVAILABLE:-0}" == "1" ]]; then
+        source_base_load_config "$CONFIG_FILE"
+    fi
+
     # 解析命令行参数
-    if [[ $# -eq 0 ]]; then
-        interactive_mode
+    # use_tui=auto -> -1 (根据能力决定)
+    # use_tui=force-on -> 1 (--tui 很明确)
+    # use_tui=force-off -> 0 (--cli 很明确)
+    local use_tui=-1
+    local args=()
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --tui)
+                use_tui=1
+                shift
+                ;;
+            --cli)
+                use_tui=0
+                shift
+                ;;
+            --tui-status)
+                # 调试: 显示终端能力检测结果
+                load_modules
+                capability_apply_config "$CONFIG_FILE"
+                detect_capability
+                capability_print_status
+                exit 0
+                ;;
+            *)
+                args+=("$1")
+                shift
+                ;;
+        esac
+    done
+
+    if [[ $use_tui -eq 1 ]]; then
+        # 显式 --tui
+        interactive_mode_tui
+    elif [[ $use_tui -eq 0 ]]; then
+        # 显式 --cli
+        if [[ ${#args[@]} -eq 0 ]]; then
+            interactive_mode
+        else
+            command_mode "${args[@]}"
+        fi
+    elif [[ ${#args[@]} -eq 0 ]]; then
+        # 无参数 - 自动判断模式
+        # 终端能力足够 + 配置允许 -> TUI
+        if [[ "${LXMS_UI_TUI_AVAILABLE:-0}" == "1" ]]; then
+            capability_apply_config "$CONFIG_FILE"
+            detect_capability
+            if [[ "${LXMS_FORCE_TUI:-0}" == "1" ]]; then
+                interactive_mode_tui
+            else
+                interactive_mode
+            fi
+        else
+            interactive_mode
+        fi
     else
-        command_mode "$@"
+        command_mode "${args[@]}"
     fi
 }
 

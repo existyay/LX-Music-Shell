@@ -50,7 +50,27 @@ aur/*.pkg.tar.zst
 aur/*.tar.gz
 aur/PKGBUILD.bak
 aur/pkg/
+aur/pkg/**
 aur/src/
+aur/src/**
+
+# Build artifacts
+*.o
+*.so
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Temporary
+*.tmp
+*.bak
+*.orig
+
+# Design specs and internal docs (not committed to repo)
+docs/superpowers/
+docs/plans/
 
 # Keep AUR metadata (PKGBUILD/.SRCINFO) and helper scripts tracked
 # (remove specific ignores above that would hide needed files like push-to-aur.sh)
