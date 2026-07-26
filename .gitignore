@@ -43,11 +43,11 @@ secrets*
 *password*
 
 # AUR submission helpers (local-only tools)
-aur/PUBLISH_TO_AUR.md
-aur/submit-to-aur.sh
-aur/build-aur-package.sh
-aur/AUR_INFO_NEEDED.md
-aur/PKGBUILD.bak
-aur/.SRCINFO.local
-aur/PKGBUILD.local
-aur/push-to-aur.sh
+# Local AUR working copies and build outputs
+aur/lx-music-shell-git/
+aur/LX-Music-Shell-*.tar.gz
+aur/pkg/
+aur/src/
+
+# Keep AUR metadata (PKGBUILD/.SRCINFO) and helper scripts tracked
+# (remove specific ignores above that would hide needed files like push-to-aur.sh)
