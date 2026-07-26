@@ -1,4 +1,4 @@
-# Maintainer: existyay <liujam826@gmail.com>
+# Maintainer:  <>
 pkgname=lx-music-shell
 pkgver=1.1.0
 pkgrel=1
@@ -31,24 +31,24 @@ checkdepends=("shellcheck")
 provides=()
 conflicts=()
 replaces=()
-backup=("/etc/skel/.config/lx-music-shell/config"
-        "/etc/skel/.config/lx-music-shell/sources.list")
+backup=("etc/skel/.config/lx-music-shell/config"
+        "etc/skel/.config/lx-music-shell/sources.list")
 options=()
 install=lx-music-shell.install
-source=("https://github.com/existyay/LX-Music-Shell/archive/refs/tags/v$pkgver.tar.gz")
+source=("lx-music-shell-source-v$pkgver.tar.gz::https://github.com/existyay/LX-Music-Shell/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=("SKIP")
 
 prepare() {
-    cd "$srcdir/$pkgname-$pkgver"
+    cd "$srcdir/LX-Music-Shell-$pkgver"
 }
 
 build() {
-    cd "$srcdir/$pkgname-$pkgver"
+    cd "$srcdir/LX-Music-Shell-$pkgver"
     true
 }
 
 check() {
-    cd "$srcdir/$pkgname-$pkgver"
+    cd "$srcdir/LX-Music-Shell-$pkgver"
     local s
     for s in lx-music-shell sources-update.sh uninstall.sh install.sh install-aur.sh; do
         bash -n "$s" || return 1
@@ -59,7 +59,7 @@ check() {
 }
 
 package() {
-    cd "$srcdir/$pkgname-$pkgver"
+    cd "$srcdir/LX-Music-Shell-$pkgver"
 
     # Install main executable
     install -Dm755 lx-music-shell "$pkgdir/usr/bin/lx-music-shell"
