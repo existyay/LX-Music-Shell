@@ -21,6 +21,27 @@ Thumbs.db
 # Test output
 *.log
 
+# Security: SSH keys and credentials
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+id_dsa*
+id_ecdsa*
+authorized_keys
+known_hosts
+*.gpg
+*.asc
+.env
+.env.*
+credentials*
+secrets*
+*.secret
+*token*
+*password*
+
 # AUR submission helpers (local-only tools)
 aur/PUBLISH_TO_AUR.md
 aur/submit-to-aur.sh
@@ -29,7 +50,4 @@ aur/AUR_INFO_NEEDED.md
 aur/PKGBUILD.bak
 aur/.SRCINFO.local
 aur/PKGBUILD.local
-
-# Local PKGBUILD overrides (can be regenerated)
-aur/PKGBUILD.local
-aur/.SRCINFO.local
+aur/push-to-aur.sh
