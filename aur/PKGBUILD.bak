@@ -35,7 +35,7 @@ backup=("etc/skel/.config/lx-music-shell/config"
         "etc/skel/.config/lx-music-shell/sources.list")
 options=()
 install=lx-music-shell.install
-source=("lx-music-shell-source-v1.1.0.tar.gz::https://github.com/existyay/LX-Music-Shell/archive/refs/tags/v1.1.0.tar.gz")
+source=("lx-music-shell-source-v1.1.1.tar.gz::https://github.com/existyay/LX-Music-Shell/archive/refs/tags/v1.1.1.tar.gz")
 sha256sums=("SKIP")
 
 prepare() {
