@@ -77,4 +77,6 @@ docs/legacy/
 references/
 
 # Keep AUR metadata (PKGBUILD/.SRCINFO) and helper scripts tracked
-# (remove specific ignores above that would hide needed files like push-to-aur.sh)
+# (remove specific ignores above that would hide needed files like push-to-aur.sh)package-lock.json
+node_modules/
+package*.json
