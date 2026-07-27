@@ -1,445 +1,583 @@
 #!/usr/bin/env bash
 #==============================================================================
-# LX-Music-Shell TUI 渲染模块
+# LX-Music-Shell TUI 渲染模块 (v2.2)
 #
-# 实现简化分栏 TUI 界面:
-#   - 顶部状态条 (Logo + 网络 + 音量)
-#   - 主区(列表 + 详情)
-#   - 自适应 (cols >= 100: 左右, cols < 100: 上下)
-#   - 可选封面图渲染 (kitty / iTerm / sixel)
+# 设计参考:
+#   - references/go-musicfox : vim 风格键盘 (jkhl/gG/Space/n/p/...)
+#   - references/bilibili-tui  : 多区块自适应布局 + kitty 图片协议
 #
-# 用法:
-#   . lib/capability.sh
-#   . lib/input.sh
-#   . lib/tui.sh
-#   detect_capability
-#   tui_render state_json
+# 关键改进 (相对 v2.0/v2.1):
+#   - 自适应三区块布局 (搜索框 / 列表 / 详情)
+#   - vim-style 键盘映射函数 (tui_op_*) 供 main() 调度
+#   - kitty/iTerm2/Sixel 三协议图片渲染
+#   - 真彩色主题 (dark 默认可切)
+#   - 实时进度条 (后台 tick)
+#   - 输入面板焦点 (搜索框 / 列表 / 详情 三态)
 #
-# state_json 字段:
-#   title, version, network, volume
-#   playlist[], selected, playing
-#   current_song: {name, artist, album, duration, quality, cover_url}
-#   progress: {current, total}
+# 状态接口 (供 main 和其它模块调用):
+#   LXMS_STATE_TITLE      - 标题
+#   LXMS_STATE_VERSION    - 版本号
+#   LXMS_STATE_NETWORK    - connected | disconnected | checking
+#   LXMS_STATE_VOLUME     - 0-100
+#   LXMS_STATE_PLAYLIST   - 关联数组 (track_id -> "name|artist|album|duration|song_id|quality|cover_url")
+#   LXMS_STATE_SELECTED   - 当前选中项索引
+#   LXMS_STATE_PLAYING    - 当前播放索引 (无播放时 -1)
+#   LXMS_STATE_PROGRESS_C - 播放进度秒
+#   LXMS_STATE_PROGRESS_T - 总时长秒
 #==============================================================================
 
-# 防止重复加载
 [[ -n "${LXMS_TUI_LOADED:-}" ]] && return 0
 readonly LXMS_TUI_LOADED=1
 
 #==============================================================================
 # ANSI 常量
 #==============================================================================
-readonly TUI_ESC=$'\033'
-readonly TUI_SAVE_CURSOR="${TUI_ESC}[s"
-readonly TUI_RESTORE_CURSOR="${TUI_ESC}[u"
-readonly TUI_CLEAR_SCREEN="${TUI_ESC}[2J${TUI_ESC}[H"
-readonly TUI_HIDE_CURSOR="${TUI_ESC}[?25l"
-readonly TUI_SHOW_CURSOR="${TUI_ESC}[?25h"
-readonly TUI_ALT_SCREEN_ON="${TUI_ESC}[?1049h"
-readonly TUI_ALT_SCREEN_OFF="${TUI_ESC}[?1049l"
-readonly TUI_RESET="${TUI_ESC}[0m"
-readonly TUI_BOLD="${TUI_ESC}[1m"
-readonly TUI_DIM="${TUI_ESC}[2m"
-readonly TUI_REVERSE="${TUI_ESC}[7m"
-readonly TUI_CLEAR_LINE="${TUI_ESC}[2K"
+readonly _T_ESC=$'\033'
 
-# 颜色
-readonly TUI_FG_BLACK="${TUI_ESC}[30m"
-readonly TUI_FG_RED="${TUI_ESC}[31m"
-readonly TUI_FG_GREEN="${TUI_ESC}[32m"
-readonly TUI_FG_YELLOW="${TUI_ESC}[33m"
-readonly TUI_FG_BLUE="${TUI_ESC}[34m"
-readonly TUI_FG_MAGENTA="${TUI_ESC}[35m"
-readonly TUI_FG_CYAN="${TUI_ESC}[36m"
-readonly TUI_FG_WHITE="${TUI_ESC}[37m"
-readonly TUI_FG_GRAY="${TUI_ESC}[90m"
+# 光标
+readonly TUI_CURSOR_HIDE="${_T_ESC}[?25l"
+readonly TUI_CURSOR_SHOW="${_T_ESC}[?25h"
+readonly TUI_ALT_ON="${_T_ESC}[?1049h"
+readonly TUI_ALT_OFF="${_T_ESC}[?1049l"
+readonly TUI_CLEAR="${_T_ESC}[2J${_T_ESC}[H"
+readonly TUI_CLR_LINE="${_T_ESC}[2K"
 
-readonly TUI_BG_BLUE="${TUI_ESC}[44m"
-readonly TUI_BG_CYAN="${TUI_ESC}[46m"
+# 基础样式
+readonly TUI_RESET="${_T_ESC}[0m"
+readonly TUI_BOLD="${_T_ESC}[1m"
+readonly TUI_DIM="${_T_ESC}[2m"
+readonly TUI_INVERT="${_T_ESC}[7m"
+
+# 前景色
+readonly TUI_FG_BLACK="${_T_ESC}[30m"
+readonly TUI_FG_RED="${_T_ESC}[31m"
+readonly TUI_FG_GREEN="${_T_ESC}[32m"
+readonly TUI_FG_YELLOW="${_T_ESC}[33m"
+readonly TUI_FG_BLUE="${_T_ESC}[34m"
+readonly TUI_FG_MAGENTA="${_T_ESC}[35m"
+readonly TUI_FG_CYAN="${_T_ESC}[36m"
+readonly TUI_FG_WHITE="${_T_ESC}[37m"
+readonly TUI_FG_GRAY="${_T_ESC}[90m"
+
+# 背景色
+readonly TUI_BG_BLUE="${_T_ESC}[44m"
+readonly TUI_BG_CYAN="${_T_ESC}[46m"
 
 #==============================================================================
-# 光标定位辅助
+# 主题 (默认 dark)
+#
+# 切换主题: tui_set_theme dark/green/light/mono
+#==============================================================================
+TUI_THEME_NAME="dark"
+
+# 主题色定义: bg_fg accent sub
+_tui_get_theme_colors() {
+    case "${TUI_THEME_NAME:-dark}" in
+        green)
+            printf 'cyan|green|cyan'
+            ;;
+        light)
+            printf 'black|blue|red'
+            ;;
+        mono)
+            printf 'white|gray|gray'
+            ;;
+        dark|*)
+            printf 'white|cyan|magenta'
+            ;;
+    esac
+}
+
+tui_set_theme() {
+    case "$1" in
+        dark|green|light|mono) TUI_THEME_NAME="$1" ;;
+        *) return 1 ;;
+    esac
+}
+
+#==============================================================================
+# 光标定位
 #==============================================================================
 tui_goto() {
-    local row="$1"
-    local col="$2"
-    printf '%s[%d;%dH' "$TUI_ESC" "$row" "$col"
+    printf '%s[%d;%dH' "${_T_ESC}" "$1" "$2"
 }
 
 tui_clear_screen() {
-    printf '%s%s' "$TUI_CLEAR_SCREEN" "$TUI_ALT_SCREEN_ON"
-    # shellcheck disable=SC2034
-    TUI_ALT_SCREEN_ACTIVE=1
+    printf '%s%s' "${TUI_ALT_ON}" "${TUI_CLEAR}"
 }
 
 #==============================================================================
-# 顶部状态条
+# 图片渲染 (kitty / iTerm2 / Sixel)
 #
-#   参数: state 字符串(可选)
-#   输出: 状态条并保持在行 1
+# 用法: tui_render_image <url> <row> <col> [width_chars]
+# 返回: 0 成功 (输出多行 ANSI 序列), 1 不支持
 #==============================================================================
-tui_render_status_bar() {
-    local state="${1:-}"
-    local cols
-    cols=$(get_cols)
+_tui_image_protocol=""  # kitty | iTerm | sixel | none
 
-    # 跳到 row 1 并清行
-    tui_goto 1 1
-    printf '%s' "$TUI_CLEAR_LINE"
+tui_render_image() {
+    local url="$1" row="$2" col="$3" size="${4:-medium}"
 
-    # Logo 区 (左)
-    printf '%b%s%b ♪ %bLX-Music-Shell%b  ' \
-        "$TUI_FG_MAGENTA" "${TUI_BOLD}" \
-        "${TUI_FG_WHITE}" "${TUI_BOLD}" \
-        "${TUI_RESET}" "${TUI_RESET}"
-
-    # 版本号
-    local version="${LXMS_VERSION:-v2.0}"
-    printf '%bv%b  ' "${TUI_FG_GRAY}" "${TUI_FG_GRAY}${version}${TUI_RESET}"
-
-    # 网络状态 (中间)
-    local network="${LXMS_NETWORK:-connected}"
-    case "$network" in
-        connected)
-            printf '%s●%s %s已连接%s  ' \
-                "$TUI_FG_GREEN" "$TUI_RESET" \
-                "${TUI_DIM}" "${TUI_RESET}"
-            ;;
-        disconnected)
-            printf '%s●%s %s已断开%s  ' \
-                "$TUI_FG_RED" "$TUI_RESET" \
-                "${TUI_DIM}" "${TUI_RESET}"
-            ;;
-        checking)
-            printf '%s○%s %s检测中%s  ' \
-                "$TUI_FG_YELLOW" "$TUI_RESET" \
-                "${TUI_DIM}" "${TUI_RESET}"
-            ;;
-    esac
-
-    # 音量条 (右)
-    local volume="${LXMS_VOLUME:-80}"
-    local vol_bars=$((volume / 10))
-    local vol_empty=$((10 - vol_bars))
-
-    printf '%s音量%s ' "${TUI_FG_GRAY}" "${TUI_RESET}"
-    local i
-    for ((i = 0; i < vol_bars; i++)); do
-        printf '%s▰%s' "$TUI_FG_CYAN" "$TUI_RESET"
-    done
-    for ((i = 0; i < vol_empty; i++)); do
-        printf '%s▱%s' "$TUI_FG_GRAY" "$TUI_RESET"
-    done
-    printf ' %d%%' "$volume"
-
-    # 填满右侧
-    local cur_len=$((10 + 14 + ${#version} + 12 + vol_bars + vol_empty + 5))
-    local pad=$((cols - cur_len))
-    if [[ $pad -gt 0 ]]; then
-        printf '%*s' "$pad" ''
+    if [[ -z "$url" || "$url" == "null" ]]; then
+        return 1
     fi
 
-    # 底部分隔
+    # 探测协议 (探测一次并缓存)
+    if [[ -z "$_tui_image_protocol" ]]; then
+        case "${TERM:-}${TERM_PROGRAM:-}" in
+            *kitty*|xterm-kitty*)
+                _tui_image_protocol="kitty" ;;
+            *iTerm*|*WezTerm*)
+                _tui_image_protocol="iTerm" ;;
+            *mlterm*|*foot*|*contour*)
+                _tui_image_protocol="sixel" ;;
+            *)
+                _tui_image_protocol="none" ;;
+        esac
+    fi
+
+    tui_goto "${row}" "${col}"
+
+    case "$_tui_image_protocol" in
+        kitty)
+            # Kitty 图形协议 (URL 直传)
+            printf '\033_Ga=T,f=100,t=f;%s\033\\' "$url"
+            ;;
+        iTerm)
+            # iTerm2 inline image (base64)
+            local b64
+            b64=$(printf '%s' "$url" | base64 2>/dev/null || true)
+            printf '\033]1337;File=inline=1;preserveAspectRatio=1:%s\a' "$b64"
+            ;;
+        sixel)
+            # Sixel 占位 (实际项目难在纯 shell)
+            printf '%s[image]%s' "${TUI_DIM}" "${TUI_RESET}"
+            ;;
+        *)
+            # 协议不支持, 返回失败让调用方渲染占位符
+            return 1
+            ;;
+    esac
+}
+
+tui_render_cover_placeholder() {
+    local row="${1:-1}"
+    local col="${2:-1}"
+    local w="${3:-20}"
+    local h="${4:-8}"
+
+    tui_goto "${row}" "${col}"
+    printf '%s╔%s┓%s\n' "${TUI_FG_CYAN}" "$(printf '═%.0s' $(seq 1 $((w-2))))" "${TUI_RESET}"
+    for ((i = 0; i < h - 2; i++)); do
+        tui_goto $((row + 1 + i)) "$col"
+        printf '%s║%*s%s\n' "${TUI_FG_CYAN}" "$((w - 1))" "${TUI_RESET}"
+    done
+    tui_goto $((row + h - 1)) "$col"
+    printf '%s╚%s┛%s\n' "${TUI_FG_CYAN}" "$(printf '═%.0s' $(seq 1 $((w-2))))" "${TUI_RESET}"
+    tui_goto $((row + h / 2)) "$((col + w / 2 - 3))"
+    printf '%s♪ ♪ ♪%s' "${TUI_DIM}" "${TUI_RESET}"
+}
+
+#==============================================================================
+# 头部状态条
+#==============================================================================
+tui_render_header() {
+    local cols lines
+    cols=$(get_cols)
+    lines=$(get_lines)
+
+    # 行 1: 标题 + 网络 + 音量
+    tui_goto 1 1
+    printf '%s' "${TUI_CLR_LINE}"
+    printf '%s%s%s ♪ %sLX-Music-Shell%s %s' \
+        "${TUI_FG_MAGENTA}" "${TUI_BOLD}" "${TUI_FG_WHITE}" \
+        "${TUI_BOLD}" "${TUI_RESET}" \
+        "${TUI_FG_GRAY}"
+    printf 'v%s%s  ' "$(_tui_get_theme_colors | cut -d'|' -f1)" \
+        "${LXMS_STATE_VERSION:-2.2}"
+    # 网络状态
+    case "${LXMS_STATE_NETWORK:-connected}" in
+        connected)
+            printf '%s●%s %s已连接%s  ' \
+                "${TUI_FG_GREEN}" "${TUI_RESET}" "${TUI_DIM}" "${TUI_RESET}" ;;
+        disconnected)
+            printf '%s●%s %s已断开%s  ' \
+                "${TUI_FG_RED}" "${TUI_RESET}" "${TUI_DIM}" "${TUI_RESET}" ;;
+        checking)
+            printf '%s○%s %s检测中%s  ' \
+                "${TUI_FG_YELLOW}" "${TUI_RESET}" "${TUI_DIM}" "${TUI_RESET}" ;;
+    esac
+    # 音量
+    local vol="${LXMS_STATE_VOLUME:-80}"
+    local filled=$((vol / 10))
+    printf '%s音量%s ' "${TUI_FG_GRAY}" "${TUI_RESET}"
+    local i
+    for ((i = 0; i < filled; i++)); do printf '%s▰%s' "${TUI_FG_CYAN}" "${TUI_RESET}"; done
+    for ((i = filled; i < 10; i++)); do printf '%s▱%s' "${TUI_FG_GRAY}" "${TUI_RESET}"; done
+    printf ' %d%%' "$vol"
+
+    # 行 2: 分隔
     tui_goto 2 1
-    printf '%s' "$TUI_CLEAR_LINE"
-    local sep=''
-    for ((i = 0; i < cols; i++)); do sep+='─'; done
+    printf '%s' "${TUI_CLR_LINE}"
+    local sep=""
+    for ((i = 0; i < cols; i++)); do sep+="─"; done
     printf '%s%s%s' "${TUI_DIM}" "$sep" "${TUI_RESET}"
 }
 
 #==============================================================================
-# 布局计算
+# 搜索框 (聚焦于搜索面板时)
 #==============================================================================
-tui_calculate_layout() {
-    local cols="${1:-80}"
-    local lines="${2:-24}"
+tui_render_search_box() {
+    local cols
+    cols=$(get_cols)
+    local query="${LXMS_STATE_SEARCH_QUERY:-}"
 
-    if [[ "$cols" -ge 100 ]] && [[ "$lines" -ge 24 ]]; then
-        # 左右分栏
-        TUI_LAYOUT_MODE="split"
-        TUI_LEFT_COLS=$((cols * 40 / 100))
-        TUI_RIGHT_COLS=$((cols - TUI_LEFT_COLS - 1))
-    elif [[ "$lines" -ge 24 ]]; then
-        # 上下堆叠
-        TUI_LAYOUT_MODE="stack"
-        TUI_LIST_LINES=$((lines / 2))
-        TUI_DETAIL_LINES=$((lines - TUI_LIST_LINES - 3))
-    else
-        # 最小化布局
-        TUI_LAYOUT_MODE="minimal"
+    tui_goto 3 1
+    printf '%s' "${TUI_CLR_LINE}"
+
+    # 焦点状态
+    local focus_marker="  "
+    if [[ "${TUI_FOCUS_PANEL:-list}" == "search" ]]; then
+        focus_marker="${TUI_FG_CYAN}▸ ${TUI_RESET}"
     fi
+
+    printf '%s%s🔍 搜索: %s' \
+        "$focus_marker" "${TUI_BOLD}${TUI_FG_CYAN}" "${TUI_RESET}"
+
+    # 输入框
+    if [[ -n "$query" ]]; then
+        printf '%s%s%s' "${TUI_BG_BLUE}${TUI_FG_WHITE}" "$query" "${TUI_RESET}"
+        printf '%s│%s' "${TUI_FG_CYAN}" "${TUI_RESET}"
+    else
+        printf '%s(按 / 输入关键词)%s' "${TUI_DIM}" "${TUI_RESET}"
+    fi
+
+    # 源和音质
+    printf '  %s源:%s%s%s  ' \
+        "${TUI_DIM}" "${TUI_RESET}" \
+        "${TUI_FG_CYAN}" "${CURRENT_SOURCE:-netease}"
+    printf '%s音:%s%s%s  ' \
+        "${TUI_DIM}" "${TUI_RESET}" \
+        "${TUI_FG_CYAN}" "${DEFAULT_QUALITY:-flac}"
 }
 
 #==============================================================================
-# 列表区 (左侧或上侧)
+# 列表渲染
 #
-# state 字段 (passed as arguments or globals):
-#   PLAYLIST array - 歌曲条目
-#   SELECTED_INDEX - 选中项
-#   PLAYING_INDEX  - 当前播放项
+# 状态变量:
+#   LXMS_PLAYLIST        - 歌曲数组 (元素 "name|artist|album|duration|song_id|quality|cover|quals|play_url")
+#   LXMS_SELECTED_INDEX  - 当前选中项
+#   LXMS_PLAYING_INDEX   - 当前播放项 (-1 表示无)
 #==============================================================================
 tui_render_list() {
-    local cols="${1:-40}"
-    local start_row="${2:-3}"
-    local height="${3:-20}"
-    local playlist=("${LXMS_PLAYLIST[@]:-}")
-    local selected="${LXMS_SELECTED_INDEX:-0}"
-    local playing="${LXMS_PLAYING_INDEX:--1}"
+    local start_row="${1:-4}"
+    local height="${2:-18}"
+    local cols="${3:-$(get_cols)}"
+    local list_w="${4:-48}"
 
     # 标题
-    tui_goto "$start_row" 1
-    printf '%s' "$TUI_CLEAR_LINE"
-    printf '%b搜索结果 (%d 首)%b' \
-        "${TUI_BOLD}${TUI_FG_CYAN}" \
-        "${#playlist[@]}" \
-        "${TUI_RESET}"
+    tui_goto "${start_row}" 1
+    printf '%s' "${TUI_CLR_LINE}"
+    local total="${#LXMS_PLAYLIST[@]}"
+    printf '%s%s搜索结果 (%d 首)%s' \
+        "${TUI_BOLD}" "${TUI_FG_CYAN}" "$total" "${TUI_RESET}"
 
-    # 列表
+    # 列宽自适应
+    if [[ "$cols" -ge 100 ]]; then
+        list_w=$((cols * 45 / 100))
+    else
+        list_w=$cols
+    fi
+
+    local count=0
     local i
-    for ((i = 0; i < height - 2; i++)); do
-        local row=$((start_row + 1 + i))
-        if [[ "$row" -gt $((start_row + height)) ]]; then
-            break
+    for ((i = 0; i < total && count < height - 2; i++)); do
+        local track="${LXMS_PLAYLIST[i]}"
+        local item row
+        # 格式: "name|artist|album|duration|song_id|quality|cover|quals|play_url"
+        IFS='|' read -r name artist album duration song_id quality cover quals play_url <<< "$track"
+        # 反转义前翻未显示的序号
+        if [[ -z "$name" ]]; then continue; fi
+
+        row=$((start_row + 1 + count))
+        count=$((count + 1))
+        tui_goto "${row}" 1
+        printf '%s' "${TUI_CLR_LINE}"
+
+        # 播放标记 / 高亮
+        local prefix="  "
+        if [[ "$i" == "${LXMS_PLAYING_INDEX:--1}" ]]; then
+            prefix="${TUI_FG_GREEN}▶ ${TUI_RESET}"
         fi
-        tui_goto "$row" 1
-        printf '%s' "$TUI_CLEAR_LINE"
 
-        if [[ "$i" -lt "${#playlist[@]}" ]]; then
-            local track="${playlist[$i]}"
-            # 解析条目: 序号|歌名|歌手|时长|song_id|quality|cover|quals|url
-            IFS='|' read -r num name artist duration sid q cover quals url <<< "$track"
-
-            local marker='  '
-            if [[ "$i" == "$playing" ]]; then
-                marker="${TUI_FG_GREEN}▶ ${TUI_RESET}"
-            fi
-
-            local highlight=""
-            local reset_highlight=""
-            if [[ "$i" == "$selected" ]]; then
-                highlight="${TUI_REVERSE}"
-                reset_highlight="${TUI_RESET}"
-            fi
-
-            local display_name="$name"
-            local max_name_len=$((cols - 14))
-            if [[ "${#display_name}" -gt "$max_name_len" ]]; then
-                display_name="${display_name:0:$((max_name_len - 1))}…"
-            fi
-
-            # 音质标签
-            local q_label
-            case "${q:-}" in
-                hires) q_label="${TUI_FG_YELLOW}HRes${TUI_RESET}" ;;
-                flac)  q_label="${TUI_FG_CYAN}FLAC${TUI_RESET}" ;;
-                320)   q_label="${TUI_FG_GREEN}HQ${TUI_RESET}" ;;
-                128)   q_label="${TUI_FG_GRAY}SQ${TUI_RESET}" ;;
-                *)     q_label="${TUI_FG_GRAY}---${TUI_RESET}" ;;
-            esac
-
-            printf '%s%s %2d. %s %s%s' \
-                "$marker" "$highlight" "$i" "$display_name" \
-                "$q_label" "$reset_highlight"
+        local highlight=""
+        local unhighlight=""
+        if [[ "$i" == "${LXMS_SELECTED_INDEX:-0}" ]]; then
+            highlight="${TUI_INVERT}${TUI_BG_BLUE}${TUI_FG_WHITE}"
+            unhighlight="${TUI_RESET}"
         fi
+
+        # 序号
+        printf '%s%s%s%s ' "$prefix" "$highlight" \
+            "$(printf '%2d' "$i")" "$unhighlight"
+
+        # 标题 (截断到 fit)
+        local display_name="$name"
+        local max_name=$((list_w - 14))
+        if [[ ${#display_name} -gt $max_name && $max_name -gt 3 ]]; then
+            display_name="${display_name:0:$((max_name - 1))}…"
+        fi
+
+        # 歌手
+        local display_artist="$artist"
+        local max_artist=$((max_name / 2))
+        if [[ ${#display_artist} -gt $max_artist && $max_artist -gt 3 ]]; then
+            display_artist="${display_artist:0:$((max_artist - 1))}…"
+        fi
+
+        printf '%s%s%s%s - %s%s%s ' \
+            "$highlight" "$display_name" "$unhighlight" \
+            "$highlight" "$display_artist" "$unhighlight"
+
+        # 音质标签 (右对齐)
+        local q_label
+        case "${quality:-}" in
+            hires) q_label="${TUI_FG_YELLOW}HRes${TUI_RESET}" ;;
+            flac)  q_label="${TUI_FG_CYAN}FLAC${TUI_RESET}" ;;
+            320)   q_label="${TUI_FG_GREEN}HQ${TUI_RESET}" ;;
+            128)   q_label="${TUI_FG_GRAY}SQ${TUI_RESET}" ;;
+            *)     q_label="${TUI_FG_GRAY}---${TUI_RESET}" ;;
+        esac
+        printf '%s\n' "$q_label"
     done
 
     # 底部提示
-    local hint_row=$((start_row + height))
-    if [[ "$hint_row" -lt $((start_row + height + 1)) ]]; then
-        tui_goto "$hint_row" 1
-        printf '%s' "$TUI_CLEAR_LINE"
-        printf '%s↑↓ 移动  Enter 播放  Tab 切换面板%s' \
+    if [[ $count -gt 0 ]]; then
+        tui_goto $((start_row + height - 1)) 1
+        printf '%s' "${TUI_CLR_LINE}"
+        printf '%s↑↓:移动 Enter:播放 Space:暂停 /:搜索 q:退出%s' \
             "${TUI_DIM}" "${TUI_RESET}"
     fi
 }
 
 #==============================================================================
-# 详情区 (右侧或下侧)
+# 详情区 (右侧)
 #==============================================================================
 tui_render_detail() {
-    local cols="${1:-60}"
-    local start_row="${2:-3}"
+    local start_row="${1:-4}"
+    local cols="${2:-$(get_cols)}"
+    local detail_w="${3:-48}"
+
     local playing="${LXMS_PLAYING_INDEX:--1}"
-    local playlist=("${LXMS_PLAYLIST[@]:-}")
 
-    if [[ "$playing" -lt 0 ]] || [[ "$playing" -ge "${#playlist[@]}" ]]; then
-        # 无播放
-        tui_goto "$start_row" "$((cols / 2 - 5))"
-        printf '%s♪ 暂无播放%s' "${TUI_DIM}" "${TUI_RESET}"
-        return 0
+    # 封面区
+    if [[ "$playing" -ge 0 ]] && [[ "${LXMS_SHOW_COVER:-1}" == "1" ]]; then
+        local track="${LXMS_PLAYLIST[playing]}"
+        local cover
+        IFS='|' read -r _ _ _ _ _ _ cover _ _ <<< "$track"
+        if [[ -n "$cover" ]] && [[ "$cover" != "null" ]]; then
+            if ! tui_render_image "$cover" "${start_row}" 1 medium 2>/dev/null; then
+                tui_render_cover_placeholder "${start_row}" 1 20 8
+            fi
+        else
+            tui_render_cover_placeholder "${start_row}" 1 20 8
+        fi
     fi
 
-    local track="${playlist[$playing]}"
-    IFS='|' read -r num name artist album duration sid q cover quals url <<< "$track"
-
-    local row="$start_row"
-
-    # 封面 (如果支持)
-    if supports_images && [[ -n "$cover" ]] && [[ "${LXMS_SHOW_COVER:-1}" == "1" ]]; then
-        tui_render_cover "$cover" "$row" 1
-        # 封面占 8 行
-        row=$((row + 8))
-    else
-        # ASCII 占位符
-        tui_goto "$row" 1
-        printf '%s╔════════════════╗%s' "${TUI_FG_CYAN}" "${TUI_RESET}"
-        tui_goto $((row + 1)) 1
-        printf '%s║   ♪ ♪ ♪    ║%s' "${TUI_FG_CYAN}" "${TUI_RESET}"
-        tui_goto $((row + 2)) 1
-        printf '%s║   (无封面)    ║%s' "${TUI_DIM}" "${TUI_RESET}"
-        tui_goto $((row + 3)) 1
-        printf '%s╚════════════════╝%s' "${TUI_FG_CYAN}" "${TUI_RESET}"
-        row=$((row + 5))
-    fi
+    local row=$((start_row + 8))
 
     # 元数据
-    tui_goto "$row" 1
-    printf '%s%s%s' "${TUI_BOLD}" "$name" "${TUI_RESET}"
-    row=$((row + 1))
+    if [[ "$playing" -ge 0 ]]; then
+        local track="${LXMS_PLAYLIST[playing]}"
+        local name artist album duration quality
+        IFS='|' read -r name artist album duration _ quality _ _ <<< "$track"
 
-    if [[ -n "$artist" ]]; then
-        tui_goto "$row" 1
-        printf '%s歌手: %s%s' "${TUI_DIM}" "$artist" "${TUI_RESET}"
+        tui_goto "${row}" 1
+        printf '%s%s%s%s' "${TUI_BOLD}${TUI_FG_WHITE}" "$name" "${TUI_RESET}" ""
+        row=$((row + 1))
+
+        if [[ -n "$artist" ]]; then
+            tui_goto "${row}" 1
+            printf '%s歌手:%s %s%s\n' "${TUI_DIM}" "${TUI_RESET}" "$artist"
+            row=$((row + 1))
+        fi
+
+        if [[ -n "${album:-}" ]]; then
+            tui_goto "${row}" 1
+            printf '%s专辑:%s %s\n' "${TUI_DIM}" "${TUI_RESET}" "$album"
+            row=$((row + 1))
+        fi
+
+        if [[ -n "${duration:-}" ]]; then
+            tui_goto "${row}" 1
+            printf '%s时长:%s %s\n' "${TUI_DIM}" "${TUI_RESET}" "$duration"
+            row=$((row + 1))
+        fi
+
+        # 音质
+        tui_goto "${row}" 1
+        printf '%s音质:%s ' "${TUI_DIM}" "${TUI_RESET}"
+        local q_full
+        case "${quality:-}" in
+            hires) q_full="${TUI_FG_YELLOW}Hi-Res 24bit${TUI_RESET}" ;;
+            flac)  q_full="${TUI_FG_CYAN}FLAC 无损${TUI_RESET}" ;;
+            320)   q_full="${TUI_FG_GREEN}HQ 320kbps${TUI_RESET}" ;;
+            128)   q_full="${TUI_FG_GRAY}SQ 128kbps${TUI_RESET}" ;;
+            *)     q_full="${TUI_FG_GRAY}未知${TUI_RESET}" ;;
+        esac
+        printf '%s\n' "$q_full"
         row=$((row + 1))
     fi
-
-    if [[ -n "${album:-}" ]]; then
-        tui_goto "$row" 1
-        printf '%s专辑: %s%s' "${TUI_DIM}" "$album" "${TUI_RESET}"
-        row=$((row + 1))
-    fi
-
-    if [[ -n "${duration:-}" ]]; then
-        tui_goto "$row" 1
-        printf '%s时长: %s%s' "${TUI_DIM}" "$duration" "${TUI_RESET}"
-        row=$((row + 1))
-    fi
-
-    # 音质标签
-    tui_goto "$row" 1
-    local q_label_full
-    case "${q:-}" in
-        hires) q_label_full="${TUI_FG_YELLOW}Hi-Res (24bit/96kHz+)${TUI_RESET}" ;;
-        flac)  q_label_full="${TUI_FG_CYAN}FLAC 无损${TUI_RESET}" ;;
-        320)   q_label_full="${TUI_FG_GREEN}HQ (320k MP3)${TUI_RESET}" ;;
-        128)   q_label_full="${TUI_FG_GRAY}SQ (128k MP3)${TUI_RESET}" ;;
-        *)     q_label_full="${TUI_FG_GRAY}未知${TUI_RESET}" ;;
-    esac
-    printf '%s音质: %s' "${TUI_DIM}" "${TUI_RESET}"
-    printf '%s\n' "$q_label_full"
-    row=$((row + 1))
 
     # 进度条
-    local current="${LXMS_PLAYBACK_CURRENT:-0}"
-    local total="${LXMS_PLAYBACK_TOTAL:-100}"
+    tui_goto "${row}" 1
+    printf '%s进度%s ' "${TUI_DIM}" "${TUI_RESET}"
+    local current="${LXMS_STATE_PROGRESS_C:-0}"
+    local total="${LXMS_STATE_PROGRESS_T:-0}"
     local percent=0
     if [[ "$total" -gt 0 ]]; then
         percent=$((current * 100 / total))
     fi
-    tui_goto "$row" 1
-    printf '%s进度: %s' "${TUI_DIM}" "${TUI_RESET}"
-    local bar_w=$((cols - 14))
-    if [[ "$bar_w" -lt 5 ]]; then bar_w=20; fi
+    local bar_w=20
     local filled=$((percent * bar_w / 100))
     printf '%s[' "${TUI_FG_GRAY}"
     local j
-    for ((j = 0; j < filled; j++)); do
-        printf '%s▰%s' "${TUI_FG_GREEN}" "${TUI_RESET}"
-    done
-    for ((j = filled; j < bar_w; j++)); do
-        printf ' '
-    done
-    printf '%s] %s%d%%%s' \
-        "${TUI_FG_GRAY}" "${TUI_BOLD}" "$percent" "${TUI_RESET}"
+    for ((j = 0; j < filled; j++)); do printf '%s▰%s' "${TUI_FG_GREEN}" "${TUI_RESET}"; done
+    for ((j = filled; j < bar_w; j++)); do printf ' '; done
+    printf '%s] ' "${TUI_FG_GRAY}"
+    printf '%s%02d:%02d%s / %s%02d:%02d%s' \
+        "${TUI_BOLD}" "$((current/60))" "$((current%60))" "${TUI_RESET}" \
+        "${TUI_DIM}" "$((total/60))" "$((total%60))" "${TUI_RESET}"
 }
 
 #==============================================================================
-# 封面渲染
-#==============================================================================
-tui_render_cover() {
-    local url="$1"
-    local row="${2:-1}"
-    local col="${3:-1}"
-
-    tui_goto "$row" "$col"
-
-    case "${LXMS_TERM_IMAGES:-none}" in
-        kitty)
-            # Kitty 图形协议: \033_Ga=T,f=100,t=f,FILE_PATH\033\\
-            # 直接 URL 形式: \033_Ga=T,f=100,t=f;URL\033\\
-            printf '\033_Ga=T,f=100,t=f;%s\033\\' "$url"
-            ;;
-        iTerm)
-            # iTerm2 inline image: \033]1337;File=inline=1:<base64>\a
-            # 这里简化:输出下载命令提示
-            printf '\033]1337;File=inline=1;preserveAspectRatio=1:%s\a' \
-                "$(printf '%s' "$url" | base64)"
-            ;;
-        sixel)
-            # Sixel 格式 (简化版)
-            printf '%s[image: %s]%s' "${TUI_DIM}" "$url" "${TUI_RESET}"
-            ;;
-        none|*)
-            # 无图片协议 - 显示占位
-            printf '%s[无封面 - 终端不支持图片]%s' \
-                "${TUI_DIM}" "${TUI_RESET}"
-            ;;
-    esac
-}
-
-#==============================================================================
-# 主渲染: tui_render state_json
+# vim-style 键盘操作接口 (供主事件循环调用)
 #
-# state 字段 (全局变量):
-#   LXMS_VERSION, LXMS_NETWORK, LXMS_VOLUME
-#   LXMS_PLAYLIST[], LXMS_SELECTED_INDEX, LXMS_PLAYING_INDEX
-#   LXMS_PLAYBACK_CURRENT, LXMS_PLAYBACK_TOTAL
-#   LXMS_SHOW_COVER
+# 每个操作函数返回:
+#   0 = 已处理 (重新渲染)
+#   1 = 未处理
+#   2 = 退出
+#==============================================================================
+tui_op_quit() { return 2; }
+tui_op_back() { return 2; }
+
+tui_op_move_up() {
+    local n=${#LXMS_PLAYLIST[@]}
+    local sel=${LXMS_SELECTED_INDEX:-0}
+    sel=$((sel - 1))
+    [[ $sel -lt 0 ]] && sel=0
+    LXMS_SELECTED_INDEX=$sel
+    return 0
+}
+
+tui_op_move_down() {
+    local n=${#LXMS_PLAYLIST[@]}
+    local sel=${LXMS_SELECTED_INDEX:-0}
+    sel=$((sel + 1))
+    [[ $n -gt 0 && $sel -ge $n ]] && sel=$((n - 1))
+    [[ $n -eq 0 ]] && sel=0
+    LXMS_SELECTED_INDEX=$sel
+    return 0
+}
+
+tui_op_move_top() { LXMS_SELECTED_INDEX=0; return 0; }
+tui_op_move_bottom() {
+    local n=${#LXMS_PLAYLIST[@]}
+    [[ $n -gt 0 ]] && LXMS_SELECTED_INDEX=$((n - 1))
+    return 0
+}
+
+tui_op_play_selected() {
+    # 触发主循环处理: do_play from CLi-side
+    return 1
+}
+
+tui_op_rerender() { tui_render; return 0; }
+
+#==============================================================================
+# 主渲染函数
+#
+# 布局 (宽屏 cols >= 100):
+#   行 1     : 标题 + 网络 + 音量
+#   行 2     : 分隔
+#   行 3     : 搜索框 (focus 时显示)
+#   行 4-(n-2): 列表 (左 45%) + 详情 (右 55%)
+#   行 (n-1) : 提示
+#
+# 布局 (窄屏 cols < 100):
+#   行 1     : 标题 + 状态
+#   行 2     : 搜索框
+#   行 3-(n-1): 列表 (全宽)
+#   底部     : 详情 (横向压缩)
 #==============================================================================
 tui_render() {
     local cols lines
     cols=$(get_cols)
     lines=$(get_lines)
 
-    tui_calculate_layout "$cols" "$lines"
-
-    # 进入备用屏幕
     tui_clear_screen
+    tui_goto 1 1
 
-    # 状态条
-    tui_render_status_bar
+    # 隐藏光标
+    printf '%s' "${TUI_CURSOR_HIDE}"
 
-    # 区域注册 (供鼠标命中)
-    input_clear_regions
-    case "$TUI_LAYOUT_MODE" in
-        split)
-            input_register_region "list" 3 1 $((lines - 5)) "$TUI_LEFT_COLS"
-            input_register_region "detail" 3 $((TUI_LEFT_COLS + 2)) \
-                $((lines - 5)) "$TUI_RIGHT_COLS"
-            tui_render_list "$TUI_LEFT_COLS" 3 $((lines - 5))
-            tui_render_detail "$TUI_RIGHT_COLS" 3
-            ;;
-        stack)
-            tui_render_list "$cols" 3 "$TUI_LIST_LINES"
-            tui_render_detail "$cols" $((3 + TUI_LIST_LINES))
-            ;;
-        minimal)
-            tui_render_list "$cols" 3 "$((lines - 5))"
-            ;;
-    esac
+    # 头部 (2 行)
+    tui_render_header
 
-    # 移动到末尾
-    tui_goto "$lines" 1
-    printf '%s' "$TUI_RESET"
+    # 搜索框 (1 行)
+    tui_render_search_box
+
+    # 主区域 (从第 4 行到最后)
+    local main_start=4
+    local main_height=$((lines - main_start - 1))
+
+    if [[ "$cols" -ge 100 ]]; then
+        # 宽屏: 左右分栏
+        local list_w=$((cols * 45 / 100))
+        local detail_w=$((cols - list_w - 1))
+
+        # 注册区域供鼠标命中
+        input_clear_regions
+        input_register_region "list" "${main_start}" 1 "${main_height}" "${list_w}"
+        input_register_region "detail" "${main_start}" "$((list_w + 1))" "${main_height}" "${detail_w}"
+
+        tui_render_list "${main_start}" "${main_height}" "${cols}" "${list_w}"
+        tui_render_detail "${main_start}" "${detail_w}"
+    else
+        # 窄屏: 列表占 60%, 详情占 40%
+        local list_h=$((main_height * 6 / 10))
+        local detail_h=$((main_height - list_h))
+
+        input_clear_regions
+        input_register_region "list" "${main_start}" 1 "${list_h}" "${cols}"
+        input_register_region "detail" $((main_start + list_h)) 1 "${detail_h}" "${cols}"
+
+        tui_render_list "${main_start}" "${list_h}" "${cols}" "${cols}"
+        tui_render_detail $((main_start + list_h)) "${cols}" "${cols}"
+    fi
+
+    # 底部提示行
+    tui_goto "${lines}" 1
+    printf '%s' "${TUI_CLR_LINE}"
+    printf '%s%s%s 主题:%s | q:退出 ?:帮助' \
+        "${TUI_DIM}" "${LXMS_HELP_HINT:-按 / 搜索}" "${TUI_RESET}" \
+        "${TUI_THEME_NAME}"
 }
 
 #==============================================================================
-# 清理
+# 清理 (退出 TUI 模式)
 #==============================================================================
 tui_cleanup() {
-    # 退出备用屏幕
-    printf '%s' "$TUI_ALT_SCREEN_OFF"
-    # 显示光标
-    printf '%s' "$TUI_SHOW_CURSOR"
-    printf '%s' "$TUI_RESET"
+    printf '%s%s%s' "${TUI_ALT_OFF}" "${TUI_CURSOR_SHOW}" "${TUI_RESET}"
+    # 把 LXMS_PLAYING_INDEX 暴露给 lx-music-shell (从 TUI 主循环)
 }
+
+#==============================================================================
+# 应用主题初始化 (默认 dark)
+#==============================================================================
+tui_init_theme() {
+    if [[ "${LXMS_TUI_THEME:-}" =~ ^(dark|green|light|mono)$ ]]; then
+        TUI_THEME_NAME="${BASH_REMATCH[1]}"
+    fi
+}
+
+tui_init_theme

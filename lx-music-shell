@@ -15,7 +15,7 @@
 #==============================================================================
 
 # 版本信息
-VERSION="2.1.0"
+VERSION="2.2.0"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
@@ -140,7 +140,8 @@ load_modules() {
     fi
 
     # 加载音乐源 (v2.0)
-    local source_dir="$(dirname "$0")/sources"
+    local source_dir
+    source_dir="$(dirname "$0")/sources"
     if [[ ! -d "$source_dir" ]]; then
         source_dir="/usr/share/lx-music-shell/sources"
     fi
@@ -150,7 +151,7 @@ load_modules() {
         for src_file in "$source_dir"/*.sh; do
             [[ -f "$src_file" ]] || continue
             [[ "$(basename "$src_file")" == "_base.sh" ]] && continue
-            # shellcheck disable=SC1091
+            # shellcheck disable=SC1090,SC1091  # 动态加载已注册的源
             source "$src_file"
         done
         LXMS_SOURCES_AVAILABLE=1
@@ -911,6 +912,7 @@ show_playlist() {
 clear_playlist() {
     do_stop
     PLAYLIST=()
+    LXMS_PLAYLIST=()
     PLAYLIST_INDEX=0
     echo -e "\033[32m✓ 播放列表已清空\033[0m"
 }
@@ -918,6 +920,12 @@ clear_playlist() {
 add_to_playlist() {
     local track="$1"
     PLAYLIST+=("$track")
+
+    # 同步到 TUI 状态变量 (格式扩展为 9 列)
+    # 输入: "<index>|<name>|<artist>|<duration>|<song_id>"
+    # 输出: "<name>|<artist>|<album=music>|<duration>|<song_id>|<quality=空>|<cover=空>|<quals=空>|<play_url=空>"
+    local IFS='|' read -r idx name artist duration song_id <<< "$track"
+    LXMS_PLAYLIST+=("$name|$artist||$duration|$song_id||||")
 }
 
 #==============================================================================
@@ -1986,9 +1994,14 @@ interactive_mode_tui() {
     fi
 
     LXMS_TUI_ACTIVE=1
+    # 以下 TUI 渲染状态变量由 lib/tui.sh 渲染时读取
+    # shellcheck disable=SC2034  # 全局状态变量供 TUI 模块使用
     LXMS_VERSION="v$VERSION"
+    # shellcheck disable=SC2034
     LXMS_NETWORK="$NETWORK_STATUS"
+    # shellcheck disable=SC2034
     LXMS_VOLUME="${VOLUME:-80}"
+    export LXMS_VERSION LXMS_NETWORK LXMS_VOLUME
 
     # 启用鼠标 (如果支持)
     if supports_mouse; then
@@ -2031,6 +2044,7 @@ interactive_mode_tui() {
                 ;;
             "$EVENT_KEY_ENTER")
                 # 在 CLI 模式中播放
+                # shellcheck disable=SC2034  # TUI 状态: 当前播放项
                 LXMS_PLAYING_INDEX=${LXMS_SELECTED_INDEX:-0}
                 do_play "${LXMS_SELECTED_INDEX:-0}"
                 ;;

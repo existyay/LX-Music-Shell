@@ -71,6 +71,10 @@ __pycache__/
 # Design specs and internal docs (not committed to repo)
 docs/superpowers/
 docs/plans/
+docs/legacy/
+
+# 参考项目 (本地克隆, 仅用于研究, 不提交)
+references/
 
 # Keep AUR metadata (PKGBUILD/.SRCINFO) and helper scripts tracked
 # (remove specific ignores above that would hide needed files like push-to-aur.sh)

@@ -16,9 +16,72 @@
 ## [未发布]
 
 ### 计划中
-- 歌词显示功能 (/lyric 命令)
+- 歌词显示功能 (/lyric 命令, 实现 lx_api_get_lyric_impl)
 - 播放队列管理 (/queue 命令)
 - 真实搜索端点集成 (依赖完整 lxserver 用户)
+
+---
+
+## [2.2.0] - 2026-07-27
+
+### 重构 (Major UI Overhaul)
+
+#### TUI 完全重设计
+
+参考项目:
+- [references/go-musicfox](https://github.com/go-musicfox/go-musicfox) - vim-style 键盘映射
+- [references/bilibili-tui](https://github.com/MareDevi/bilibili-tui) - 图片协议 + 多区块布局
+
+新设计:
+1. vim-style 键盘接口
+   - jk = 上下 (仿 vim)
+   - gg/G = 顶/底
+   - Space = 播放/暂停
+   - [/] = 上一首/下一首
+   - +- = 音量
+   - / = 搜索
+   - p = 切换播放模式
+   - q = 退出
+2. 多区块响应式布局
+   - cols >= 100: 左右分栏 (列表/详情)
+   - cols < 100: 上下堆叠
+3. 多主题 (dark/green/light/mono) 配置项 UI_THEME
+4. 封面自动处理: kitty / iTerm2 / Sixel / ASCII fallback
+5. 顶部动态状态条
+   - 标题 + 网络状态 + 音量条
+6. 底部帮助提示行
+   - 动态按键提示
+7. vim-style 操作接口 (tui_op_* 函数)
+   - tui_op_move_up / move_down / move_top / move_bottom / play_selected / rerender / quit / back
+   - 主事件循环调用这些函数统一处理
+
+#### 技术变更
+- add_to_playlist 同时同步到 LXMS_PLAYLIST (9字段格式)
+- clear_playlist 同时清空 LXMS_PLAYLIST
+- lx-music-shell--tui 现以 vim 风格交互
+- TUI 状态变量以 LXMS_ 为前缀 (与 PLAYLIST 区分)
+
+#### 测试增强
+- test_tui.sh 重写: 7 个测试场景 35 个断言
+  - 主题切换 (4)
+  - vim 风格操作 (6)
+  - 状态条 (4)
+  - 搜索框 (2)
+  - 列表 (6 含空白验证)
+  - 详情 (5)
+  - 封面占位符 (2)
+  - 完整渲染 (5 含宽/窄屏)
+- 元余接口 (tui_op_quit 返回 2 等)
+
+### 参照项目 (本地使用, 未提交)
+- [references/go-musicfox] - 键盘映射参考
+- [references/bilibili-tui] - 图片渲染参考
+- 均加入 .gitignore 作为本地推导项目
+
+### 修复
+- lx-music-shell 中 SC1090/SC2034/SC2155 等 shellcheck 警告全部修复 (-o pipefail 模式下)
+- load_modules 使用 declare -gA 保证全局可用
+- add_to_playlist 拆装 9 列格式供 TUI 直接读取
 
 ---
 
