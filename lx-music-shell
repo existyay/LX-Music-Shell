@@ -923,8 +923,9 @@ add_to_playlist() {
 
     # 同步到 TUI 状态变量 (格式扩展为 9 列)
     # 输入: "<index>|<name>|<artist>|<duration>|<song_id>"
-    # 输出: "<name>|<artist>|<album=music>|<duration>|<song_id>|<quality=空>|<cover=空>|<quals=空>|<play_url=空>"
-    local IFS='|' read -r idx name artist duration song_id <<< "$track"
+    # 输出: "<name>|<artist>|<album=空>|<duration>|<song_id>|<quality=空>|<cover=空>|<quals=空>|<play_url=空>"
+    # shellcheck disable=SC2034  # idx 是占位符, 用来跳过第0个字段
+    local IFS='|' read -r _ name artist duration song_id <<< "$track"
     LXMS_PLAYLIST+=("$name|$artist||$duration|$song_id||||")
 }
 

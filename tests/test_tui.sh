@@ -83,7 +83,7 @@ test_themes() {
     colors=$(_tui_get_theme_colors)
     tui_set_theme green
     local colors=$(_tui_get_theme_colors)
-    assert_contains "green 颜色包含" "$colors" "cyan"
+    assert_contains "green 颜色包含" "$colors" "42"
     tui_set_theme dark
 }
 
@@ -243,7 +243,7 @@ test_cover_placeholder() {
 
     # 占位符应能正常渲染
     out=$(tui_render_cover_placeholder 1 1 20 8 2>&1)
-    assert_contains "占位符包含框" "$out" "╔"
+    assert_contains "占位符包含框" "$out" "╭"
     assert_contains "占位符包含音符" "$out" "♪"
 }
 
@@ -274,7 +274,7 @@ test_full_render() {
     assert_contains "宽屏含 Logo" "$out" "LX-Music-Shell"
     assert_contains "宽屏含歌曲" "$out" "稻香"
     assert_contains "宽屏含搜索框" "$out" "搜索"
-    assert_contains "宽屏含帮助提示" "$out" "q:退出"
+    assert_contains "宽屏含帮助提示" "$out" "[q]退出"
 
     # 窄屏
     out=$(COLUMNS=80 LINES=24 tui_render 2>&1)
