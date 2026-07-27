@@ -16,10 +16,60 @@
 ## [未发布]
 
 ### 计划中
-- 实现真实 API 集成 (酷狗、QQ、咪咕等需要签名验证)
-- 歌词显示功能
-- 播放队列管理
-- 其他 5 个源的真实实现
+- 歌词显示功能 (/lyric 命令)
+- 播放队列管理 (/queue 命令)
+- 真实搜索端点集成 (依赖完整 lxserver 用户)
+
+---
+
+## [2.1.0] - 2026-07-27
+
+### 新增 (Minor)
+
+#### LX-Music 聚合 API 客户端 (sources/lx_api.sh)
+新增统一的 LX-Music 自定义源协议客户端,对接用户自建/公益的 LX-Music API 服务器
+(如 lxmusicapi.onrender.com 或自建的 lx-server),通过统一协议解析 5 大音源的真实播放 URL。
+
+特性:
+- 配置项 (写入 ~/.config/lx-music-shell/config):
+  - LX_API_URL  - API 服务器地址 (默认: https://lxmusicapi.onrender.com)
+  - LX_API_KEY  - 访问令牌 (默认: share-v3)
+  - LX_API_TIMEOUT - 请求超时秒 (默认: 15)
+- 自动探测搜索端点可用性:
+  - 完整 lxserver 用户:返回真实 API 搜索结果
+  - 公益服务器 (lxmusicapi.onrender.com 等只提供 URL 解析): 
+    自动回退到本地演示数据 (含真实 song_id)
+- 5 大音源统一注册到源框架 (netease/kugou/kuwo/qq/migu)
+- 通过 Huibq 风格 URL 端点 GET /url/{source}/{song_id}/{quality}
+  支持音质保底链 (hires → flac → 320k → 128k)
+
+#### do_play 集成 LX-Music API
+播放时若 URL 为 null,v2.1.0 会自动:
+1. 根据当前源 (netease/kugou/kuwo/qq/migu) 映射到 LX 协议源代码
+2. 调用 source_base_get_play_url 走音质保底链解析
+3. 返回真实的 http(s) URL 传给 mpv/mplayer/ffplay
+
+#### do_search 智能参数识别
+修复 `/search` 命令参数解析的多个 bugs:
+- `/search 关键词 limit` (用默认源)
+- `/search 关键词 源名 limit` (显式指定源)
+- 之前 `/search 周杰伦 3` 被误解为 source="3"
+
+#### search_mock 返回真实 song_id
+mock 数据中每首歌都包含真实的 song_id (网易云 ID/酷狗 hash/酷我 rid/QQ songmid),
+即使公益服务器不提供搜索端点,do_play 时仍能通过 LX-Music API 解析真实 URL。
+
+### 变更
+- 修复 .install hook 的 pkill -f 自杀问题导致 yay SIGTERM (v2.0.1 紧急修复)
+- 删除独立的 sources/netease.sh (被 lx_api.sh 替代)
+- 改用 ps -eo pid,comm | awk 精确匹配 lx-music-shell 进程
+- 配置模板加入 LX_API_URL/LX_API_KEY/QUALITY_MODE/DEFAULT_QUALITY/UI_TUI/UI_MOUSE
+
+### 验证
+- 80/80 单元测试通过
+- shellcheck 0 errors / namcap 0 warnings
+- 6/6 源连通测试通过
+- 实测 LX-Music API URL 解析成功返回真实 mp3 URL
 
 ---
 

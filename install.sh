@@ -6,7 +6,7 @@
 set -e
 
 # shellcheck disable=SC2034  # 版本变量,供未来更新检查使用
-VERSION="2.0.1"
+VERSION="2.1.0"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="${HOME}/.config/lx-music-shell"
 MAN_DIR="/usr/local/share/man/man1"
@@ -67,6 +67,19 @@ AUTO_UPDATE_SOURCES="true"
 
 # 播放模式 (list/loop/single/random)
 PLAY_MODE="list"
+
+# LX-Music 聚合 API 服务器 (用于解析 5 大音源真实 URL)
+LX_API_URL="https://lxmusicapi.onrender.com"
+LX_API_KEY="share-v3"
+LX_API_TIMEOUT="15"
+
+# 音质 (hires/flac/320/128) + 保底模式 (highest/balanced/fastest)
+QUALITY_MODE="highest"
+DEFAULT_QUALITY="flac"
+
+# UI 模式 (auto/on/off)
+UI_TUI="auto"
+UI_MOUSE="auto"
 EOF
     echo "  ✓ 创建配置文件: $CONFIG_DIR/config"
 fi

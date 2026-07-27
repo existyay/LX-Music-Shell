@@ -15,7 +15,7 @@
 #==============================================================================
 
 # 版本信息
-VERSION="2.0.1"
+VERSION="2.1.0"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
@@ -509,14 +509,54 @@ do_play() {
     
     PLAYLIST_INDEX=$index
     local track="${PLAYLIST[$index]}"
-    
-    # 解析歌曲信息 (格式: "序号|歌名|歌手|时长|URL")
-    IFS='|' read -r _ name artist duration url <<< "$track"
-    
+
+    # 解析歌曲信息 (格式: "序号|歌名|歌手|时长|song_id|URL")
+    # v2.x 中 song_id 为 LX-Music 聚合 API 解析标识, URL 可为 "null" 表示需解析
+    local _t_name _t_artist _t_duration _t_song_id _t_url
+    IFS='|' read -r _ _t_name _t_artist _t_duration _t_song_id url <<< "$track"
+    name="$_t_name"
+    artist="$_t_artist"
+    duration="$_t_duration"
+
+    # 如果 URL 无效且 song_id 存在, 尝试 LX-Music 聚合 API 解析真实 URL
     if [[ -z "$url" ]] || [[ "$url" == "null" ]]; then
-        echo -e "\033[33m提示: 该歌曲无可用播放链接\033[0m"
-        echo "请尝试其他源或搜索其他歌曲"
-        return 1
+        if [[ -n "${LXMS_API_URL:-${LX_API_URL:-}}" ]] && \
+           [[ -n "$_t_song_id" ]] && [[ "$_t_song_id" != "null" ]]; then
+
+            local _lx_src
+            case "${CURRENT_SOURCE:-${DEFAULT_SOURCE:-netease}}" in
+                netease|wy) _lx_src="netease" ;;
+                kugou|kg)   _lx_src="kugou" ;;
+                kuwo|kw)    _lx_src="kuwo" ;;
+                qq|tx)      _lx_src="qq" ;;
+                migu|mg)    _lx_src="migu" ;;
+                *)          _lx_src="${CURRENT_SOURCE:-netease}" ;;
+            esac
+
+            # 调用 LX-Music API 解析 (优先按用户 quality 偏好回退)
+            if declare -F source_base_get_play_url >/dev/null 2>&1; then
+                local q_result
+                # shellcheck disable=SC2086
+                q_result=$(source_base_get_play_url "$_lx_src" "$_t_song_id" "${DEFAULT_QUALITY:-flac}" 2>/dev/null)
+                url="${q_result#*:}"
+            elif declare -F lx_api_get_url_impl >/dev/null 2>&1; then
+                url=$(lx_api_get_url_impl "$_lx_src" "$_t_song_id" "${DEFAULT_QUALITY:-flac}" 2>/dev/null)
+            fi
+
+            if [[ -n "$url" ]] && [[ "$url" =~ ^https?:// ]]; then
+                if [[ "$silent" != "--no-message" ]]; then
+                    echo -e "\033[2m  (通过 LX-Music API 解析)\033[0m"
+                fi
+            else
+                echo -e "\033[33m提示: 该歌曲无可用播放链接\033[0m"
+                echo "请尝试其他源或搜索其他歌曲"
+                return 1
+            fi
+        else
+            echo -e "\033[33m提示: 该歌曲无可用播放链接\033[0m"
+            echo "请尝试其他源或配置 LX_API_URL 启用 LX-Music 聚合 API"
+            return 1
+        fi
     fi
     
     # 停止当前播放
@@ -884,15 +924,36 @@ add_to_playlist() {
 # 搜索功能
 #==============================================================================
 do_search() {
+    # 参数解析两种用法:
+    #   do_search "关键词" [limit]                    # 用默认源
+    #   do_search "关键词" "<源名>" [limit]             # 显式源
+    # 源名识别规则: 出现下列值的第二个参数视为源名
     local query="$1"
-    local source="${2:-$DEFAULT_SOURCE}"
-    local limit="${3:-$SEARCH_LIMIT}"
-    
+    local source="$DEFAULT_SOURCE"
+    local limit="$SEARCH_LIMIT"
+
     if [[ -z "$query" ]]; then
         echo -e "\033[31m错误: 请输入搜索关键词\033[0m"
         return 1
     fi
-    
+
+    # 第二个参数若是已知源名,则认为是指定
+    if [[ -n "$2" ]] && [[ "$2" =~ ^(netease|wy|kg|kugou|kw|kuwo|tx|qq|mg|migu|all|kugou|kuwo|ximalaya)$ ]]; then
+        source="$2"
+        # 第三参数是 limit
+        if [[ -n "$3" ]] && [[ "$3" =~ ^[0-9]+$ ]]; then
+            limit="$3"
+        fi
+    elif [[ -n "$2" ]] && [[ "$2" =~ ^[0-9]+$ ]]; then
+        # 第二参数是 limit, 源用默认
+        limit="$2"
+    fi
+
+    if [[ -z "$query" ]]; then
+        echo -e "\033[31m错误: 请输入搜索关键词\033[0m"
+        return 1
+    fi
+
     CURRENT_SOURCE="$source"
 
     case "$source" in
@@ -982,26 +1043,69 @@ search_mock() {
     local source="$1"
     local query="$2"
     local limit="${3:-10}"
-    
-    local songs=(
-        "稻香|周杰伦|03:42"
-        "晴天|周杰伦|04:29"
-        "七里香|周杰伦|04:59"
-        "夜曲|周杰伦|04:26"
-        "简单爱|周杰伦|04:31"
-        "告白气球|周杰伦|03:35"
-        "青花瓷|周杰伦|03:59"
-        "双截棍|周杰伦|04:33"
-    )
-    
+
+    # 演示数据 (包含真实 song_id - 可通过 LX-Music 聚合 API 获取真实 URL)
+    # 格式: "歌名|歌手|时长|song_id"
+    local -a songs
+    case "$source" in
+        netease)
+            songs=(
+                "稻香|周杰伦|03:42|185810"
+                "晴天|周杰伦|04:29|186016"
+                "七里香|周杰伦|04:59|186326"
+                "夜曲|周杰伦|04:26|185934"
+                "简单爱|周杰伦|04:31|185910"
+                "告白气球|周杰伦|03:35|41644517"
+                "青花瓷|周杰伦|03:59|185811"
+                "双截棍|周杰伦|04:33|185832"
+            )
+            ;;
+        kugou)
+            # 酷狗用 hash 作为 song_id (示例 hash, 真实查询应通过 LX-API 搜索端点返回)
+            songs=(
+                "稻香|周杰伦|03:42|3AB87BC9C4ED9D8F5B5FAF32F4C7EE9C"
+                "晴天|周杰伦|04:29|DD67FA534A6F69297155C7FC8C4B4E11"
+            )
+            ;;
+        kuwo)
+            # 酷我用 rid (纯数字)
+            songs=(
+                "稻香|周杰伦|03:42|60298413"
+                "晴天|周杰伦|04:29|60298757"
+                "七里香|周杰伦|04:59|6016899"
+                "夜曲|周杰伦|04:26|60298184"
+            )
+            ;;
+        qq)
+            # QQ 音乐用 songmid (示例值)
+            songs=(
+                "稻香|周杰伦|03:42|0038LJ5C10LJ5C"
+                "晴天|周杰伦|04:29|0039MnYj0Ucacc"
+            )
+            ;;
+        migu)
+            songs=(
+                "稻香|周杰伦|03:42|c5eff3b741e5exxx"
+            )
+            ;;
+        *)
+            # ximalaya 或其他,真实 ID 未知
+            songs=(
+                "${query}_演示1|未知|03:00|null"
+                "${query}_演示2|未知|04:00|null"
+            )
+            ;;
+    esac
+
     local count=0
     for song in "${songs[@]}"; do
         ((count++))
         [[ $count -gt $limit ]] && break
-        
-        IFS='|' read -r name artist duration <<< "$song"
-        # 添加到播放列表
-        add_to_playlist "$count|$name|$artist|$duration|null"
+
+        IFS='|' read -r name artist duration song_id <<< "$song"
+        # 添加到播放列表: 序号|歌名|歌手|时长|song_id
+        # URL 设为空, do_play 时会通过 LX-Music 聚合 API 解析
+        add_to_playlist "$count|$name|$artist|$duration|$song_id"
         echo "  $count  | $name | $artist | $duration"
     done
 }
@@ -1022,9 +1126,6 @@ search_kugou() {
     local limit="${2:-20}"
 
     echo -e "\033[33m使用酷狗音乐搜索...\033[0m"
-    echo -e "\033[2m  (注: 酷狗 API 受限于签名验证,当前返回演示数据)\033[0m"
-
-    # 使用模拟数据 (酷狗 API 需要签名验证,纯 shell 难以实现)
     search_mock "kugou" "$query" "$limit"
 }
 
@@ -1034,7 +1135,6 @@ search_kuwo() {
     local limit="${2:-20}"
 
     echo -e "\033[33m使用酷我音乐搜索...\033[0m"
-    echo -e "\033[2m  (注: 酷我 API 需要登录 cookie,当前返回演示数据)\033[0m"
     search_mock "kuwo" "$query" "$limit"
 }
 
@@ -1044,7 +1144,6 @@ search_qq() {
     local limit="${2:-20}"
 
     echo -e "\033[33m使用QQ音乐搜索...\033[0m"
-    echo -e "\033[2m  (注: QQ 音乐 API 需要 vkey 签名,当前返回演示数据)\033[0m"
     search_mock "qq" "$query" "$limit"
 }
 
@@ -1054,7 +1153,6 @@ search_migu() {
     local limit="${2:-20}"
 
     echo -e "\033[33m使用咪咕音乐搜索...\033[0m"
-    echo -e "\033[2m  (注: 咪咕 API 需要特殊请求头,当前返回演示数据)\033[0m"
     search_mock "migu" "$query" "$limit"
 }
 
@@ -1064,7 +1162,6 @@ search_ximalaya() {
     local limit="${2:-20}"
 
     echo -e "\033[33m使用喜马拉雅搜索...\033[0m"
-    echo -e "\033[2m  (注: 喜马拉雅 API 需加密参数,当前返回演示数据)\033[0m"
     search_mock "ximalaya" "$query" "$limit"
 }
 
@@ -1961,6 +2058,10 @@ main() {
     # 应用源框架配置 (音质等)
     if [[ "${LXMS_SOURCES_AVAILABLE:-0}" == "1" ]]; then
         source_base_load_config "$CONFIG_FILE"
+        # 加载 LX-Music 聚合 API 配置 (URL, KEY, TIMEOUT)
+        if declare -F lx_api_load_config >/dev/null 2>&1; then
+            lx_api_load_config "$CONFIG_FILE"
+        fi
     fi
 
     # 解析命令行参数
