@@ -15,7 +15,7 @@
 #==============================================================================
 
 # 版本信息
-VERSION="2.2.0"
+VERSION="2.2.1"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
@@ -924,8 +924,9 @@ add_to_playlist() {
     # 同步到 TUI 状态变量 (格式扩展为 9 列)
     # 输入: "<index>|<name>|<artist>|<duration>|<song_id>"
     # 输出: "<name>|<artist>|<album=空>|<duration>|<song_id>|<quality=空>|<cover=空>|<quals=空>|<play_url=空>"
-    # shellcheck disable=SC2034  # idx 是占位符, 用来跳过第0个字段
-    local IFS='|' read -r _ name artist duration song_id <<< "$track"
+    # 注意: 不能写成 local IFS='|' read -r ... (local 会把 read/-r 当变量名)
+    local _idx name artist duration song_id
+    IFS='|' read -r _idx name artist duration song_id <<< "$track"
     LXMS_PLAYLIST+=("$name|$artist||$duration|$song_id||||")
 }
 

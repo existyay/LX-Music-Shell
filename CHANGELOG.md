@@ -22,6 +22,18 @@
 
 ---
 
+## [2.2.1] - 2026-07-28
+
+### 修复 (Critical)
+- **add_to_playlist 运行时错误**: `local IFS='|' read -r ... <<< "$track"`
+  是非法结构 — local 会把 `read`/`-r` 当作变量名声明,
+  运行时抛出 `local: "-r": 不是有效的标识符`, read 从未执行,
+  导致 LXMS_PLAYLIST 同步为空字段 (TUI 列表无歌名/歌手)
+  修复: 先 `local _idx name artist duration song_id` 声明,
+  再用 `IFS='|' read -r ...` 环境前缀形式调用
+- 新增 tests/test_playlist.sh 回归测试 (12 断言):
+  字段同步/无运行时错误/全项目危险模式静态扫描/clear_playlist 同步
+
 ## [2.2.0] - 2026-07-27
 
 ### 重构 (Major UI Overhaul)
