@@ -19,6 +19,65 @@
 - 歌词显示功能 (/lyric 命令, 实现 lx_api_get_lyric_impl)
 - 播放队列管理 (/queue 命令)
 - 真实搜索端点集成 (依赖完整 lxserver 用户)
+- 频谱可视化 (lib/spectrum.py + ffmpeg)
+- go-musicfox 全部 16 个子菜单实现 (当前仅 search 真正可用)
+
+---
+
+## [2.3.0] - 2026-07-28
+
+### 重构 (Major UI Overhaul)
+
+#### Fox-style TUI - 完整复现 go-musicfox 视觉
+
+参考项目本地化深魔入:
+- references/go-musicfox/internal/ui/cover_renderer.go (封面渲染)
+- references/go-musicfox/internal/ui/lyric_renderer.go (歌词渲染)
+- references/go-musicfox/internal/ui/song_info_renderer.go (播放栏)
+- references/go-musicfox/internal/ui/menu_main.go (主菜单)
+- references/go-musicfox/internal/ui/layout_const.go (布局常量)
+
+新增 lib/tui_fox.sh (411 行):
+- 顶部水平红线: 行 1 ── musicfox ── (logo 可配置)
+- 副标题区: 行 2 显示用户昵称或 [未登录]
+- 主菜单: 16 项 Fox-style 入口 (搜索/我的歌单/专辑/榜单/精选歌单/
+  热门歌手/最近播放/云盘/主播电台/私人FM/账号/收藏/每日推荐/帮助/检查更新)
+- 双列布局 (cols >= 88), 单列布局 (cols < 88)
+- 选中项: => N. 标题 红色加粗
+- 歌词区: 5 行居中 (与 go-musicfox 一致, CompactLyricLines=3, FullLyricLines=5)
+- 底部播放栏: [模式] 音量% ♫ ♪ ♫ ♪ ♥ 歌名 歌手
+- 进度条: █▰▰▱▱ + mm:ss/mm:ss (已播/总时长)
+
+新增 lib/lyric.py (290 行, python3):
+- LRC 标准解析: [mm:ss.xx]text
+- YRC 逐字解析: [mm:ss.xx]<start,duration>字</start>字...
+- smooth/wave/glow 三种渲染模式
+- CJK=2 / ASCII=1 字符宽度 (unicodedata.east_asian_width)
+- 100ms 粒度缓存 (与 go-musicfox lyricCacheKey 一致)
+
+新增交互入口:
+- lx-music-shell --fox 启动 Fox-style TUI
+- UI_FOX=on 配置项设置后自动选用新 TUI
+
+#### 技术变更
+
+多语言混合架构:
+- bash: 主循环/键盘事件/菜单导航/mpv 控制/ANSI 渲染/Kitty 协议
+- python3: LRC/YRC 歌词解析与渲染 (未来: 频谱数据处理, 封面下载重采样)
+- 通信: stdin/stdout JSON (2ms 子进程启动 + 100ms 缓存避免频繁调用)
+
+行为改进:
+- interactive_mode_fox 新增函数 (与 interactive_mode_tui 并存)
+- interactive_mode 退出时还原终端状态 (备屏关闭 + 光标显示 + 鼠标禁用)
+- EOF 检测: stdin 不是 tty 时自动退出 TUI 循环
+- LXMS_PLAYLIST 访问改为 set-u 安全 (使用 +set 检测代替默认值语法)
+
+#### 测试增强
+- tests/test_fox.sh (39 断言): 字符宽度/填充/截断/菜单/渲染/
+  双列布局/python3 集成/危险模式扫描/vim 操作
+- 全部测试套件 144/144 通过 (capability 13 + fox 39 + input 33 +
+  playlist 11 + sources 13 + tui 35)
+- shellcheck 0 errors / namcap 0 warnings
 
 ---
 

@@ -15,7 +15,7 @@
 #==============================================================================
 
 # 版本信息
-VERSION="2.2.1"
+VERSION="2.3.0"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
@@ -2063,6 +2063,98 @@ interactive_mode_tui() {
 }
 
 #==============================================================================
+# TUI Fox 风格主循环 (go-musicfox 视觉重制)
+#
+# 与 interactive_mode_tui 的差异:
+#   - 使用 lib/tui_fox.sh 渲染 (go-musicfox 风格布局)
+#   - vim-style 键盘 (j/k/g/G/Space/Enter/[/]/+/-/q)
+#   - 主菜单导航 (16 项 Fox-style 菜单, 选中项=> 红色高亮)
+#   - 集成 lib/lyric.py 实时渲染歌词
+#   - 底部播放栏 + 进度条 + 歌词区 同时显示
+#==============================================================================
+interactive_mode_fox() {
+    # 检测 TUI 能力
+    if [[ "${LXMS_UI_CAPABILITY_AVAILABLE:-0}" != "1" ]]; then
+        echo "TUI 模块未加载,退回 CLI"
+        interactive_mode
+        return
+    fi
+
+    # 应用配置
+    capability_apply_config "$CONFIG_FILE"
+    detect_capability
+    if [[ "${LXMS_FORCE_TUI:-0}" != "1" ]]; then
+        echo "终端能力不足或 UI_TUI=off,使用 CLI 模式"
+        interactive_mode
+        return
+    fi
+
+    # 加载 Fox-style 模块
+    . "${LXMS_LIB_DIR:-lib}/tui_fox.sh"
+
+    LXMS_TUI_ACTIVE=1
+
+    # 全局状态变量 (由 fx_render 读取)
+    FX_USER_NICKNAME="${USER:-未登录}"
+    FX_VOLUME="${VOLUME:-80}"
+    FX_MODE="${PLAY_MODE:-list}"
+    FX_STATE="paused"
+    [[ -n "${LXMS_PLAYING_INDEX:-}" ]] && [[ ${LXMS_PLAYING_INDEX} -ge 0 ]] && FX_STATE="playing"
+    FX_PROGRESS_C=0
+    FX_PROGRESS_T=0
+    FX_LYRIC_LINES=("" "" "" "" "")
+    FX_MENU_SEL=0
+    export FX_USER_NICKNAME FX_VOLUME FX_MODE FX_STATE FX_PROGRESS_C FX_PROGRESS_T
+    export FX_LYRIC_LINES FX_MENU_SEL
+
+    # 隐藏光标
+    printf '%s' "${FX_HIDE_CURSOR}"
+
+    # 主循环
+    local running=1
+    while [[ $running -eq 1 ]]; do
+        fx_render
+
+        if ! input_read_event 0.2; then
+            # 读不到事件: 检测是否 EOF
+            if [[ ! -t 0 ]]; then
+                # stdin 不是 tty (例如管道/重定向) -> 退出
+                break
+            fi
+            continue
+        fi
+        local ev_type="${EVENT_TYPE:-0}"
+
+        case "$ev_type" in
+            "$EVENT_KEY_QUIT" | "$EVENT_KEY_ESC")
+                running=0
+                ;;
+            "$EVENT_KEY_UP" | "${EVENT_KEY_K:-}")
+                # vim j/k 映射: k=up
+                fx_op_move_up
+                ;;
+            "$EVENT_KEY_DOWN" | "${EVENT_KEY_J:-}")
+                fx_op_move_down
+                ;;
+            "$EVENT_KEY_ENTER")
+                # Enter 进入子菜单 (当前仅 'search' 真实可用)
+                local sel="${FX_MENU_KEY[FX_MENU_SEL]:-}"
+                if [[ "$sel" == "search" ]]; then
+                    fx_cleanup
+                    LXMS_TUI_ACTIVE=0
+                    interactive_mode
+                    return
+                fi
+                ;;
+        esac
+    done
+
+    fx_cleanup
+    LXMS_TUI_ACTIVE=0
+    printf '\n'
+}
+
+#==============================================================================
 # 命令行入口 (v2.0)
 #==============================================================================
 main() {
@@ -2085,12 +2177,19 @@ main() {
     # use_tui=force-on -> 1 (--tui 很明确)
     # use_tui=force-off -> 0 (--cli 很明确)
     local use_tui=-1
+    local use_fox=0
     local args=()
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --tui)
                 use_tui=1
+                shift
+                ;;
+            --fox)
+                # go-musicfox 风格 TUI (新版)
+                use_tui=1
+                use_fox=1
                 shift
                 ;;
             --cli)
@@ -2114,7 +2213,11 @@ main() {
 
     if [[ $use_tui -eq 1 ]]; then
         # 显式 --tui
-        interactive_mode_tui
+        if [[ $use_fox -eq 1 ]]; then
+            interactive_mode_fox
+        else
+            interactive_mode_tui
+        fi
     elif [[ $use_tui -eq 0 ]]; then
         # 显式 --cli
         if [[ ${#args[@]} -eq 0 ]]; then
@@ -2124,8 +2227,18 @@ main() {
         fi
     elif [[ ${#args[@]} -eq 0 ]]; then
         # 无参数 - 自动判断模式
-        # 终端能力足够 + 配置允许 -> TUI
-        if [[ "${LXMS_UI_TUI_AVAILABLE:-0}" == "1" ]]; then
+        # UI_FOX=on 优先 -> Fox 风格; 否则用旧 TUI
+        local ui_fox_pref
+        ui_fox_pref=$(grep -E "^UI_FOX=" "$CONFIG_FILE" 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '"\047' || echo "")
+        if [[ "$ui_fox_pref" == "on" ]] && [[ "${LXMS_UI_TUI_AVAILABLE:-0}" == "1" ]]; then
+            capability_apply_config "$CONFIG_FILE"
+            detect_capability
+            if [[ "${LXMS_FORCE_TUI:-0}" == "1" ]]; then
+                interactive_mode_fox
+            else
+                interactive_mode
+            fi
+        elif [[ "${LXMS_UI_TUI_AVAILABLE:-0}" == "1" ]]; then
             capability_apply_config "$CONFIG_FILE"
             detect_capability
             if [[ "${LXMS_FORCE_TUI:-0}" == "1" ]]; then
