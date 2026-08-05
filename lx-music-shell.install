@@ -1,0 +1,80 @@
+# shellcheck disable=SC2148
+#==============================================================================
+# LX-Music-Shell pacman 安装钩子
+#
+# 注意: 不要使用 `pkill -f "lx-music-shell"`
+#   该模式会匹配到 pacman/yay 自身的进程 (因为执行命令里含 lx-music-shell),
+#   导致安装时被 SIGTERM 自杀。改用更精确的进程匹配模式。
+#==============================================================================
+
+# 仅终止"用户实际在运行 lx-music-shell 播放器"的进程
+# 策略:
+#   1. 不匹配 pacman/yay 自身进程 (排除 alpm/yay/makepkg 上下文)
+#   2. 只匹配名为 "lx-music-shell" 的可执行 (而非命令行中含字符串)
+#   3. 用 pgrep 精确匹配再 kill PID,避免 pkill -f 副作用
+#   4. 不阻塞安装 (默认 sleep 在最小化)
+_lxms_stop_running_instances() {
+    # 排除 pacman 安装上下文中的进程 (TERM/USR2 由 alpm 触发)
+    # 仅终止独立运行的 lx-music-shell 进程 (ps comm 是 lx-music-shell 而非 yt-dlp 等)
+    local pids
+    # shellcheck disable=SC2009
+    pids=$(ps -eo pid,comm | awk '$2 == "lx-music-shell" {print $1}')
+    if [[ -n "$pids" ]]; then
+        # shellcheck disable=SC2086
+        kill -TERM $pids 2>/dev/null || true
+    fi
+}
+
+# 安装前执行
+pre_install() {
+    _lxms_stop_running_instances
+}
+
+# 安装后执行
+post_install() {
+    # 不阻塞安装流程,只输出快速提示
+    cat << 'EOF'
+>>> LX-Music-Shell 2.0.0 installed ✓
+
+Usage:
+  lx-music-shell            # 自动检测,CUI/TUI
+  lx-music-shell --tui      # 强制 TUI 模式 (鼠标/封面)
+  lx-music-shell --cli      # 强制 CLI 模式 (向后兼容 v1.x)
+  lx-music-shell --test-sources
+  lx-music-shell --tui-status    # 查看终端能力
+
+Config: ~/.config/lx-music-shell/
+
+Optional deps:
+  mpv, jq, ffmpeg, bluez, pipewire
+EOF
+}
+
+# 升级前执行
+pre_upgrade() {
+    _lxms_stop_running_instances
+}
+
+# 升级后执行
+post_upgrade() {
+    post_install
+}
+
+# 卸载前执行
+pre_remove() {
+    _lxms_stop_running_instances
+    # 也终止可能在播放中的 mpv (但只限 lx-music-shell 启动的)
+    # 这里保守策略: 不主动终止 mpv (用户可能用它放别的)
+}
+
+# 卸载后执行
+post_remove() {
+    cat << 'EOF'
+>>> LX-Music-Shell removed
+
+To clean user config (optional):
+  rm -rf ~/.config/lx-music-shell
+  rm -rf ~/.cache/lx-music-shell
+  rm -rf ~/.local/share/lx-music-shell
+EOF
+}
