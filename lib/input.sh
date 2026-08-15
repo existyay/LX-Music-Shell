@@ -324,11 +324,12 @@ input_read_event() {
 #==============================================================================
 _input_write_tty_or_stdout() {
     # 尝试写 /dev/tty (交互终端),失败回退到 stdout (管道环境)
+    # 用 %b 解释 \033 转义 (否则会把字面 "\033[?1006h" 打印成可见文本)
     local data="$1"
     if [[ -t 0 ]] && [[ -c /dev/tty ]]; then
-        printf '%s' "$data" > /dev/tty 2>/dev/null || printf '%s' "$data"
+        printf '%b' "$data" > /dev/tty 2>/dev/null || printf '%b' "$data"
     else
-        printf '%s' "$data"
+        printf '%b' "$data"
     fi
 }
 
