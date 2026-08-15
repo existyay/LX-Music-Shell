@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
 #==============================================================================
-# LX-Music-Shell 播放列表同步回归测试
+# LX-Music-Shell 播放列表 / 搜索结果同步回归测试 (v3)
 #
-# 回归背景 (v2.2.0 → v2.2.1):
-#   add_to_playlist 曾写成 `local IFS='|' read -r ... <<< "$track"`,
-#   local 把 read/-r 当作变量名声明, read 从未执行, LXMS_PLAYLIST 同步为空字段.
-#   运行时错误: "local: "-r": 不是有效的标识符"
-#
-# 本测试从 lx-music-shell 提取函数实体并在隔离环境验证, 防止同类回归.
+# 验证统一 9 列轨道格式:
+#   name|artist|album|duration|song_id|quality|cover|quals|url
+# 以及 add_search_result (6 列搜索行 -> 9 列轨道) 的转换正确性。
 #==============================================================================
 
 set -uo pipefail
@@ -64,45 +61,49 @@ assert_not_contains() {
     fi
 }
 
-#==============================================================================
-# 从主脚本提取函数实体 (避免 source 全文件的副作用)
-#==============================================================================
 extract_func() {
     local fname="$1"
     sed -n "/^${fname}()/,/^}/p" "$MAIN_SCRIPT"
 }
 
-echo -e "${YELLOW}=== 测试 1: add_to_playlist 字段同步 ===${NC}"
+echo -e "${YELLOW}=== 测试 1: add_to_playlist 追加 9 列轨道 ===${NC}"
 
-test_add_to_playlist_sync() {
+test_add_to_playlist() {
     PLAYLIST=()
     LXMS_PLAYLIST=()
-
     eval "$(extract_func add_to_playlist)"
 
-    add_to_playlist "0|稻香|周杰伦|03:42|sid001"
-    add_to_playlist "1|晴天|周杰伦|04:29|sid002"
+    add_to_playlist "稻香|周杰伦|魔杰座|03:42|185810|flac|http://c.jpg|flac,320|http://u.mp3"
 
-    assert_eq "PLAYLIST 原始条目保留" \
-        "0|稻香|周杰伦|03:42|sid001" "${PLAYLIST[0]}"
-
-    assert_eq "LXMS_PLAYLIST[0] 9 列格式" \
-        "稻香|周杰伦||03:42|sid001||||" "${LXMS_PLAYLIST[0]}"
-
-    assert_eq "LXMS_PLAYLIST[1] 9 列格式" \
-        "晴天|周杰伦||04:29|sid002||||" "${LXMS_PLAYLIST[1]}"
-
-    # 字段非空 (回归核心: read 必须真的执行)
-    local name artist duration
-    IFS='|' read -r name artist _ duration _ <<< "${LXMS_PLAYLIST[0]}"
-    assert_eq "name 字段非空" "稻香" "$name"
-    assert_eq "artist 字段非空" "周杰伦" "$artist"
-    assert_eq "duration 字段非空" "03:42" "$duration"
+    assert_eq "PLAYLIST 保留 9 列" \
+        "稻香|周杰伦|魔杰座|03:42|185810|flac|http://c.jpg|flac,320|http://u.mp3" "${PLAYLIST[0]}"
+    assert_eq "LXMS_PLAYLIST 同步 9 列" \
+        "稻香|周杰伦|魔杰座|03:42|185810|flac|http://c.jpg|flac,320|http://u.mp3" "${LXMS_PLAYLIST[0]}"
 }
 
-test_add_to_playlist_sync
+test_add_to_playlist
 
-echo -e "${YELLOW}=== 测试 2: add_to_playlist 无运行时错误 ===${NC}"
+echo -e "${YELLOW}=== 测试 2: add_search_result 6 列 -> 9 列转换 ===${NC}"
+
+test_add_search_result() {
+    PLAYLIST=()
+    LXMS_PLAYLIST=()
+    eval "$(extract_func add_to_playlist)"
+    eval "$(extract_func add_search_result)"
+
+    add_search_result "稻香|周杰伦|魔杰座|03:42|185810|http://c.jpg"
+    add_search_result "晴天|周杰伦|叶惠美|04:29|186016|"
+
+    assert_eq "9 列轨道 (含封面)" \
+        "稻香|周杰伦|魔杰座|03:42|185810||http://c.jpg||" "${PLAYLIST[0]}"
+    assert_eq "9 列轨道 (无封面)" \
+        "晴天|周杰伦|叶惠美|04:29|186016||||" "${PLAYLIST[1]}"
+    assert_eq "共 2 首" "2" "${#PLAYLIST[@]}"
+}
+
+test_add_search_result
+
+echo -e "${YELLOW}=== 测试 3: add_to_playlist 无运行时错误 ===${NC}"
 
 test_no_runtime_error() {
     local err
@@ -110,27 +111,25 @@ test_no_runtime_error() {
         PLAYLIST=()
         LXMS_PLAYLIST=()
         $(extract_func add_to_playlist)
-        add_to_playlist '0|稻香|周杰伦|03:42|sid001'
+        add_to_playlist '稻香|周杰伦|魔杰座|03:42|185810|flac|http://c.jpg|flac,320|http://u.mp3'
     " 2>&1)
 
     assert_not_contains "无 local 标识符错误" "$err" "不是有效的标识符"
-    assert_not_contains "无 read 错误" "$err" "read:"
     assert_eq "stderr 为空" "" "$err"
 }
 
 test_no_runtime_error
 
-echo -e "${YELLOW}=== 测试 3: 危险模式静态扫描 ===${NC}"
+echo -e "${YELLOW}=== 测试 4: 危险模式静态扫描 (排除注释) ===${NC}"
 
 test_no_dangerous_pattern() {
-    # 扫描整个项目: local 与 read 不能出现在同一声明里
     local hits
     hits=$(grep -rn "local .*read -r\|local IFS.*read" \
-        --include="*.sh" "$PROJECT_ROOT" \
+        --include="*.sh" "$PROJECT_ROOT/lib" \
+        "$PROJECT_ROOT/sources" \
         "$PROJECT_ROOT/lx-music-shell" 2>/dev/null \
         | grep -v "references/" \
-        | grep -v "tests/test_playlist.sh" \
-        | grep -v "不能写成" \
+        | grep -vE ":\s*#" \
         || true)
 
     assert_eq "项目无 local...read 危险模式" "" "$hits"
@@ -138,18 +137,13 @@ test_no_dangerous_pattern() {
 
 test_no_dangerous_pattern
 
-echo -e "${YELLOW}=== 测试 4: clear_playlist 同步清空 ===${NC}"
+echo -e "${YELLOW}=== 测试 5: clear_playlist 同步清空 ===${NC}"
 
 test_clear_playlist() {
-    if ! grep -q "^clear_playlist()" "$MAIN_SCRIPT"; then
-        echo "  (跳过: clear_playlist 不存在)"
-        return
-    fi
+    PLAYLIST=("稻香|周杰伦|魔杰座|03:42|185810|flac|http://c.jpg|flac,320|http://u.mp3")
+    LXMS_PLAYLIST=("稻香|周杰伦|魔杰座|03:42|185810|flac|http://c.jpg|flac,320|http://u.mp3")
 
-    PLAYLIST=("0|稻香|周杰伦|03:42|sid001")
-    LXMS_PLAYLIST=("稻香|周杰伦||03:42|sid001||||")
-
-    do_stop() { :; }  # 桩: clear_playlist 依赖主脚本的 do_stop
+    do_stop() { :; }
     eval "$(extract_func clear_playlist)"
     clear_playlist 2>/dev/null
 

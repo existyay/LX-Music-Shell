@@ -241,9 +241,11 @@ capability_apply_config() {
 
             case "$key" in
                 UI_TUI)
+                    # shellcheck disable=SC2034  # 通过 _cap_safe_read eval 读取
                     LXMS_UI_TUI_OVERRIDE="$value"
                     ;;
                 UI_MOUSE)
+                    # shellcheck disable=SC2034
                     LXMS_UI_MOUSE_OVERRIDE="$value"
                     ;;
             esac

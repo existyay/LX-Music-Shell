@@ -203,7 +203,8 @@ lx_api_search_impl() {
                         end | "\(./60|floor):\(if .%60<10 then \"0\" else \"\" end)\(.%60)"
                     else "00:00"
                     end),
-                ((.songId // .songid // .id // .rid // .hash // .songmid // "") | tostring)
+                ((.songId // .songid // .id // .rid // .hash // .songmid // "") | tostring),
+                (.picUrl // .coverUrl // .cover // .albumPic // .img // "")
             ] | @tsv' 2>/dev/null); then
             if [[ -n "$parsed" ]]; then
                 printf '%s\n' "$parsed" | head -n "$limit"
@@ -389,9 +390,8 @@ lx_api_get_lyric_impl() {
 #==============================================================================
 _lx_api_register_sources() {
     local name desc_code
-    for name in netease kugou kuwo qq migu; do
+    for name in kugou kuwo qq migu; do
         case "$name" in
-            netease) desc_code="网易云音乐"  ;;
             kugou)   desc_code="酷狗音乐"    ;;
             kuwo)    desc_code="酷我音乐"    ;;
             qq)      desc_code="QQ音乐"     ;;

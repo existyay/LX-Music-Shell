@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
 #==============================================================================
-# LX-Music-Shell TUI 渲染单元测试 (v2.2)
+# LX-Music-Shell 统一 TUI 单元测试 (v3)
 #==============================================================================
 
 set -uo pipefail
 
-TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(dirname "$TEST_DIR")"
-LIB_DIR="$PROJECT_DIR/lib"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+TUI_SH="${PROJECT_ROOT}/lib/tui.sh"
+INPUT_SH="${PROJECT_ROOT}/lib/input.sh"
+
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
 
 TESTS_RUN=0
 TESTS_PASSED=0
 TESTS_FAILED=0
-
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
 
 assert_eq() {
     local desc="$1" expected="$2" actual="$3"
@@ -27,8 +28,7 @@ assert_eq() {
     else
         ((TESTS_FAILED++))
         printf '%b\n' "  ${RED}✗${NC} $desc"
-        printf '       期望: %s\n' "$expected"
-        printf '       实际: %s\n' "$actual"
+        printf '       期望: %s\n       实际: %s\n' "$expected" "$actual"
     fi
 }
 
@@ -42,269 +42,169 @@ assert_contains() {
         ((TESTS_FAILED++))
         printf '%b\n' "  ${RED}✗${NC} $desc"
         printf '       期望包含: %s\n' "$needle"
-        printf '       haystack: %.200s...\n' "$haystack" >&2
     fi
 }
 
-# 加载依赖
-load_tui() {
-    # shellcheck disable=SC1091
-    . "$LIB_DIR/capability.sh"
-    # shellcheck disable=SC1091
-    . "$LIB_DIR/input.sh"
-    # shellcheck disable=SC1091
-    . "$LIB_DIR/tui.sh"
-    detect_capability
+strip_ansi() {
+    printf '%s' "$1" | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' | tr -d '\033'
 }
 
+# 加载模块 (input.sh 提供区域注册函数)
+. "$INPUT_SH"
+. "$TUI_SH"
+
 #==============================================================================
-# 测试 1: 主题
+echo -e "${YELLOW}=== 测试 1: 字符宽度 ===${NC}"
 #==============================================================================
-test_themes() {
-    printf '\n%b\n' "${YELLOW}=== 测试 1: 主题切换 ===${NC}"
 
-    load_tui
+assert_eq "ASCII 宽度" "5" "$(tui_width 'hello')"
+assert_eq "中文 2 字 = 4 列" "4" "$(tui_width '稻香')"
+assert_eq "混合宽度" "7" "$(tui_width '稻香-AB')"
+assert_eq "空串 = 0" "0" "$(tui_width '')"
+assert_eq "数字冒号" "5" "$(tui_width '03:42')"
 
-    # 默认主题
-    assert_eq "默认主题" "dark" "${TUI_THEME_NAME:-dark}"
+#==============================================================================
+echo -e "${YELLOW}=== 测试 2: 截断 ===${NC}"
+#==============================================================================
 
-    # 切换主题
-    tui_set_theme green
-    assert_eq "切到 green" "green" "$TUI_THEME_NAME"
+assert_eq "短串不截断" "hello" "$(tui_trunc 'hello' 10)"
+out=$(tui_trunc '回到过去的美好时光' 8)
+w=$(tui_width "$out")
+assert_eq "长串截断后宽度<=8" "1" "$([ $w -le 8 ] && echo 1 || echo 0)"
+assert_contains "截断加省略号" "$out" "…"
 
-    tui_set_theme mono
-    assert_eq "切到 mono" "mono" "$TUI_THEME_NAME"
+#==============================================================================
+echo -e "${YELLOW}=== 测试 3: 菜单 ===${NC}"
+#==============================================================================
 
-    tui_set_theme invalid
-    assert_eq "无效主题应保持" "mono" "$TUI_THEME_NAME"
+assert_eq "菜单项数量=7" "7" "${#TUI_MENU_ITEMS[@]}"
+assert_eq "首项 action" "search" "$(printf '%s' "${TUI_MENU_ITEMS[0]#*|}")"
+assert_eq "末项 action" "quit" "$(printf '%s' "${TUI_MENU_ITEMS[6]#*|}")"
 
-    # 颜色定义
-    local colors
-    colors=$(_tui_get_theme_colors)
-    tui_set_theme green
-    local colors=$(_tui_get_theme_colors)
-    assert_contains "green 颜色包含" "$colors" "42"
-    tui_set_theme dark
+UI_SELECTED=3
+assert_eq "选中项 action" "quality" "$(tui_menu_selected_action)"
+
+#==============================================================================
+echo -e "${YELLOW}=== 测试 4: 模式名 / 状态图标 ===${NC}"
+#==============================================================================
+
+PLAY_MODE=list; assert_eq "list 模式名" "列表" "$(tui_mode_name)"
+PLAY_MODE=loop; assert_eq "loop 模式名" "列表循环" "$(tui_mode_name)"
+PLAY_MODE=single; assert_eq "single 模式名" "单曲循环" "$(tui_mode_name)"
+PLAY_MODE=random; assert_eq "random 模式名" "随机" "$(tui_mode_name)"
+
+PLAYER_STATUS=playing; assert_eq "播放图标" "▶" "$(tui_state_icon)"
+PLAYER_STATUS=paused; assert_eq "暂停图标" "⏸" "$(tui_state_icon)"
+PLAYER_STATUS=stopped; assert_eq "停止图标" "⏹" "$(tui_state_icon)"
+
+#==============================================================================
+echo -e "${YELLOW}=== 测试 5: 歌词解析 ===${NC}"
+#==============================================================================
+
+LXMS_LRC_RAW="[00:00.00]第一行
+[00:05.00]第二行
+[00:10.50]第三行"
+tui_lyric_parse
+assert_eq "歌词时间数组" "0 5 10" "${TUI_LRC_TIMES[*]}"
+assert_eq "歌词文本数组" "第一行 第二行 第三行" "${TUI_LRC_TEXTS[*]}"
+
+assert_eq "0s 索引" "0" "$(tui_lyric_index 0)"
+assert_eq "7s 索引 (应指向 5s 行)" "1" "$(tui_lyric_index 7)"
+assert_eq "12s 索引" "2" "$(tui_lyric_index 12)"
+
+# 元数据行应被跳过
+LXMS_LRC_RAW="[ar:歌手]
+[00:01.00]正文"
+tui_lyric_parse
+assert_eq "元数据行跳过" "1" "${#TUI_LRC_TEXTS[@]}"
+
+#==============================================================================
+echo -e "${YELLOW}=== 测试 6: 操作函数 ===${NC}"
+#==============================================================================
+
+UI_SCREEN=menu; UI_SELECTED=1
+tui_op_move_up; assert_eq "menu move_up 1->0" "0" "$UI_SELECTED"
+tui_op_move_up; assert_eq "menu move_up clamp 0" "0" "$UI_SELECTED"
+tui_op_move_down; assert_eq "menu move_down 0->1" "1" "$UI_SELECTED"
+tui_op_move_bottom; assert_eq "menu move_bottom ->6" "6" "$UI_SELECTED"
+
+UI_SCREEN=search
+PLAYLIST=("a|1|2|3|4|5|6|7|8" "b|1|2|3|4|5|6|7|8" "c|1|2|3|4|5|6|7|8")
+UI_SELECTED=0
+tui_op_move_down; assert_eq "search move_down 0->1" "1" "$UI_SELECTED"
+tui_op_move_down; tui_op_move_down; assert_eq "search move_down clamp 2" "2" "$UI_SELECTED"
+tui_op_move_top; assert_eq "search move_top" "0" "$UI_SELECTED"
+
+#==============================================================================
+echo -e "${YELLOW}=== 测试 7: 鼠标区域命中 → 动作 ===${NC}"
+#==============================================================================
+
+export COLUMNS=100 LINES=30
+UI_SCREEN=search; UI_SELECTED=0; UI_SCROLL_TOP=0
+PLAYLIST=("a|1|2|3|4|5|6|7|8" "b|1|2|3|4|5|6|7|8" "c|1|2|3|4|5|6|7|8")
+PLAYLIST_INDEX=0
+tui_register_regions 4 12
+
+assert_eq "点击列表首行" "list:0" "$(tui_mouse_action 5 5)"
+assert_eq "点击列表第二行" "list:1" "$(tui_mouse_action 5 6)"
+assert_eq "点击搜索框" "search" "$(tui_mouse_action 5 4)"
+assert_eq "点击播放栏左侧=toggle" "toggle" "$(tui_mouse_action 5 29)"
+assert_eq "点击进度条 seek" "seek:50" "$(tui_mouse_action 50 30)"
+
+#==============================================================================
+echo -e "${YELLOW}=== 测试 8: 渲染输出 ===${NC}"
+#==============================================================================
+
+render_menu() {
+    UI_SCREEN="menu"
+    PLAYER_STATUS="playing"
+    PLAYBACK_POSITION=95
+    PLAYBACK_DURATION=222
+    VOLUME=80
+    PLAY_MODE=list
+    CURRENT_SOURCE_NAME="网易云音乐"
+    VERSION="3.0"
+    LXMS_LRC_RAW=""
+    tui_render 2>/dev/null
 }
 
-#==============================================================================
-# 测试 2: vim-style 操作 (LXMS_* 状态变量)
-#==============================================================================
-test_vim_operations() {
-    printf '\n%b\n' "${YELLOW}=== 测试 2: vim-style 操作 ===${NC}"
+out=$(render_menu)
+clean=$(strip_ansi "$out")
+assert_contains "菜单渲染含标题" "$clean" "LX-Music-Shell"
+assert_contains "菜单渲染含搜索项" "$clean" "搜索音乐"
+assert_contains "菜单渲染含退出项" "$clean" "退出"
 
-    load_tui
-
-    # 设置测试列表
-    LXMS_PLAYLIST=(
-        "稻香|周杰伦|魔杰座|03:42|sid1|flac||flac,320,128|url1"
-        "晴天|周杰伦|叶惠美|04:29|sid2|320||320,128|url2"
-        "七里香|周杰伦|七里香|04:59|sid3|flac||flac,320|url3"
-        "夜曲|周杰伦|十一月的萧邦|04:26|sid4|320||320,128|url4"
-    )
-    LXMS_SELECTED_INDEX=1
-    LXMS_PLAYING_INDEX=0
-
-    # tui_op_move_up
-    tui_op_move_up
-    assert_eq "move_up (1->0)" "0" "$LXMS_SELECTED_INDEX"
-
-    # 边界: 不能 < 0
-    tui_op_move_up
-    assert_eq "move_up 边界不小于 0" "0" "$LXMS_SELECTED_INDEX"
-
-    # tui_op_move_down
-    tui_op_move_down
-    assert_eq "move_down (0->1)" "1" "$LXMS_SELECTED_INDEX"
-
-    # tui_op_move_top
-    tui_op_move_down
-    tui_op_move_down
-    tui_op_move_top
-    assert_eq "move_top" "0" "$LXMS_SELECTED_INDEX"
-
-    # tui_op_move_bottom
-    tui_op_move_bottom
-    assert_eq "move_bottom (尾)" "3" "$LXMS_SELECTED_INDEX"
-
-    # 边界: 不能超过列表长度-1
-    LXMS_PLAYLIST=()
-    tui_op_move_bottom || true
-    # 不崩溃即可 (LXMS_SELECTED_INDEX 可能保持上次的值)
-    [[ $? -le 1 ]] && echo "  ✓ 空列表 move_bottom 不崩溃"
-
+render_search() {
+    UI_SCREEN="search"
+    UI_FOCUS="list"
+    UI_QUERY="稻香"
+    PLAYER_STATUS="playing"
+    PLAYBACK_POSITION=95
+    PLAYBACK_DURATION=222
+    VOLUME=80
+    PLAY_MODE=list
+    DEFAULT_QUALITY="flac"
+    CURRENT_SOURCE_NAME="网易云音乐"
+    VERSION="3.0"
+    LXMS_LRC_RAW=""
+    tui_render 2>/dev/null
 }
 
-#==============================================================================
-# 测试 3: 头部状态条
-#==============================================================================
-test_status_bar() {
-    printf '\n%b\n' "${YELLOW}=== 测试 3: 头部状态条渲染 ===${NC}"
-
-    load_tui
-
-    local output
-    output=$(tui_render_header 2>&1)
-
-    assert_contains "包含 Logo" "$output" "LX-Music-Shell"
-    assert_contains "包含版本" "$output" "v"
-    assert_contains "包含网络状态" "$output" "已"
-    assert_contains "包含音量字样" "$output" "音量"
-}
+out=$(render_search)
+clean=$(strip_ansi "$out")
+assert_contains "搜索渲染含搜索框" "$clean" "搜索"
+assert_contains "搜索渲染含音质 chip" "$clean" "FLAC"
+assert_contains "搜索渲染含播放栏" "$clean" "🔊80%"
+assert_contains "搜索渲染含进度时间" "$clean" "01:35/03:42"
 
 #==============================================================================
-# 测试 4: 搜索框渲染
+# 结果
 #==============================================================================
-test_search_box() {
-    printf '\n%b\n' "${YELLOW}=== 测试 4: 搜索框渲染 ===${NC}"
+echo ""
+echo "========================================"
+echo "总计: $TESTS_RUN 运行"
+echo "通过: $TESTS_PASSED"
+echo "失败: $TESTS_FAILED"
+echo "========================================"
 
-    load_tui
-
-    # 没输入查询
-    LXMS_STATE_SEARCH_QUERY=""
-    local out
-    out=$(tui_render_search_box 2>&1)
-    assert_contains "显示搜索提示" "$out" "搜索"
-
-    # 已输入查询
-    LXMS_STATE_SEARCH_QUERY="稻香"
-    out=$(tui_render_search_box 2>&1)
-    assert_contains "显示查询" "$out" "稻香"
-}
-
-#==============================================================================
-# 测试 5: 列表渲染
-#==============================================================================
-test_list_render() {
-    printf '\n%b\n' "${YELLOW}=== 测试 5: 列表渲染 ===${NC}"
-
-    load_tui
-
-    LXMS_PLAYLIST=(
-        "稻香|周杰伦|魔杰座|03:42|sid1|flac||flac,320,128|url1"
-        "晴天|周杰伦|叶惠美|04:29|sid2|320||320,128|url2"
-        "七里香|周杰伦|七里香|04:59|sid3|flac||flac,320|url3"
-    )
-    LXMS_SELECTED_INDEX=1
-    LXMS_PLAYING_INDEX=0
-
-    local out
-    out=$(tui_render_list 4 18 60 30 2>&1)
-
-    assert_contains "列表包含 稻香" "$out" "稻香"
-    assert_contains "列表包含 晴天" "$out" "晴天"
-    assert_contains "列表包含 七里香" "$out" "七里香"
-    # 列表标签带 ANSI 颜色码, 用 sed 剥离颜色码后匹配
-    local stripped
-    stripped=$(printf '%s' "$out" | sed "s/$(printf '\x1b')\\[[0-9;]*m//g")
-    assert_contains "列表包含 FLAC 标签" "$stripped" "FLAC"
-    assert_contains "列表包含 HQ 标签 (320k)" "$stripped" "HQ"
-    assert_contains "包含播放标记 ▶" "$out" "▶"
-}
-
-#==============================================================================
-# 测试 6: 详情渲染
-#==============================================================================
-test_detail_render() {
-    printf '\n%b\n' "${YELLOW}=== 测试 6: 详情渲染 ===${NC}"
-
-    load_tui
-
-    LXMS_PLAYLIST=(
-        "稻香|周杰伦|魔杰座|03:42|sid1|flac||flac,320,128|url1"
-    )
-    LXMS_PLAYING_INDEX=0
-    LXMS_STATE_PROGRESS_C=70
-    LXMS_STATE_PROGRESS_T=222
-
-    local out
-    out=$(tui_render_detail 4 60 30 2>&1)
-
-    assert_contains "详情包含歌名" "$out" "稻香"
-    assert_contains "详情包含歌手" "$out" "周杰伦"
-    assert_contains "详情包含专辑" "$out" "魔杰座"
-    assert_contains "详情包含时长" "$out" "03:42"
-    assert_contains "详情包含进度" "$out" "进度"
-}
-
-#==============================================================================
-# 测试 7: 封面占位符
-#==============================================================================
-test_cover_placeholder() {
-    printf '\n%b\n' "${YELLOW}=== 测试 7: 封面占位符 ===${NC}"
-
-    load_tui
-
-    local out
-    # 无图协议时
-    LXMS_TERM_IMAGES="none"
-    out=$(tui_render_image "https://example.com/cover.jpg" 1 1 2>&1 || true)
-    # 不支持协议时返回 1,占位符应被主调用方渲染
-
-    # 占位符应能正常渲染
-    out=$(tui_render_cover_placeholder 1 1 20 8 2>&1)
-    assert_contains "占位符包含框" "$out" "╭"
-    assert_contains "占位符包含音符" "$out" "♪"
-}
-
-#==============================================================================
-# 测试 8: 完整渲染 (自适应布局)
-#==============================================================================
-test_full_render() {
-    printf '\n%b\n' "${YELLOW}=== 测试 8: 完整渲染 ===${NC}"
-
-    load_tui
-
-    LXMS_STATE_VERSION="2.2"
-    LXMS_STATE_NETWORK="connected"
-    LXMS_STATE_VOLUME=80
-    LXMS_PLAYLIST=(
-        "稻香|周杰伦|魔杰座|03:42|sid1|flac||flac,320,128|url1"
-        "晴天|周杰伦|叶惠美|04:29|sid2|320||320,128|url2"
-    )
-    LXMS_SELECTED_INDEX=0
-    LXMS_PLAYING_INDEX=0
-    LXMS_STATE_PROGRESS_C=70
-    LXMS_STATE_PROGRESS_T=222
-
-    # 宽屏
-    COLUMNS=120 LINES=30
-    local out
-    out=$(COLUMNS=120 LINES=30 tui_render 2>&1)
-    assert_contains "宽屏含 Logo" "$out" "LX-Music-Shell"
-    assert_contains "宽屏含歌曲" "$out" "稻香"
-    assert_contains "宽屏含搜索框" "$out" "搜索"
-    assert_contains "宽屏含帮助提示" "$out" "[q]退出"
-
-    # 窄屏
-    out=$(COLUMNS=80 LINES=24 tui_render 2>&1)
-    assert_contains "窄屏不崩溃" "$out" "LX-Music-Shell"
-    assert_contains "窄屏含歌曲" "$out" "稻香"
-}
-
-#==============================================================================
-# 主流程
-#==============================================================================
-main() {
-    test_themes
-    test_vim_operations
-    test_status_bar
-    test_search_box
-    test_list_render
-    test_detail_render
-    test_cover_placeholder
-    test_full_render
-
-    printf '\n========================================\n'
-    printf '总计: %d 运行\n' "$TESTS_RUN"
-    printf '通过: %d\n' "$TESTS_PASSED"
-    printf '失败: %d\n' "$TESTS_FAILED"
-    printf '========================================\n'
-
-    if [[ $TESTS_FAILED -gt 0 ]]; then
-        exit 1
-    fi
-    exit 0
-}
-
-main "$@"
+[[ $TESTS_FAILED -eq 0 ]]

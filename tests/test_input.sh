@@ -89,10 +89,12 @@ test_function_keys() {
     assert_eq "空格键" "$EVENT_KEY_SPACE" "$EVENT_TYPE"
 
     input_parse_keyboard 'q'
-    assert_eq "q 退出键" "$EVENT_KEY_QUIT" "$EVENT_TYPE"
+    assert_eq "q 键返回 KEY_CHAR" "$EVENT_KEY_CHAR" "$EVENT_TYPE"
+    assert_eq "q 键数据" "q" "$EVENT_DATA"
 
     input_parse_keyboard 'Q'
-    assert_eq "Q 退出键" "$EVENT_KEY_QUIT" "$EVENT_TYPE"
+    assert_eq "Q 键返回 KEY_CHAR" "$EVENT_KEY_CHAR" "$EVENT_TYPE"
+    assert_eq "Q 键数据" "Q" "$EVENT_DATA"
 }
 
 #==============================================================================
@@ -181,15 +183,18 @@ test_region_hit() {
 
     # 点击 list 区域
     local hit
-    hit=$(input_mouse_to_action 10 10)
+    input_mouse_to_action 10 10
+    hit="${INPUT_HIT_REGION:-}"
     assert_eq "点击 list 区域" "list" "$hit"
 
     # 点击 detail 区域
-    hit=$(input_mouse_to_action 50 10)
+    input_mouse_to_action 50 10
+    hit="${INPUT_HIT_REGION:-}"
     assert_eq "点击 detail 区域" "detail" "$hit"
 
     # 点击 search 区域
-    hit=$(input_mouse_to_action 50 1)
+    input_mouse_to_action 50 1
+    hit="${INPUT_HIT_REGION:-}"
     assert_eq "点击 search 区域" "search" "$hit"
 
     # 点击空白处 - 应返回错误

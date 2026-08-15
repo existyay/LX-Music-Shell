@@ -27,6 +27,7 @@ LXMS_SOURCE_BASE_LOADED=1
 unset SOURCE_SEARCH_FUNCS SOURCE_URL_FUNCS SOURCE_COVER_FUNCS SOURCE_NAMES 2>/dev/null || true
 declare -gA SOURCE_SEARCH_FUNCS
 declare -gA SOURCE_URL_FUNCS
+# shellcheck disable=SC2034  # 封面函数注册表 (保留接口)
 declare -gA SOURCE_COVER_FUNCS
 declare -gA SOURCE_NAMES
 
@@ -39,6 +40,7 @@ source_base_register() {
 
     SOURCE_SEARCH_FUNCS["$id"]="$search_func"
     SOURCE_URL_FUNCS["$id"]="$url_func"
+    # shellcheck disable=SC2034  # 封面函数注册表 (保留接口)
     SOURCE_COVER_FUNCS["$id"]="$cover_func"
     SOURCE_NAMES["$id"]="$display_name"
 }
@@ -62,7 +64,6 @@ source_base_load_config() {
 
     SOURCE_BASE_DEFAULT_QUALITY="flac"
     SOURCE_BASE_QUALITY_MODE="highest"
-    SOURCE_BASE_SKIP_UNAVAILABLE="1"
 
     if [[ -z "$config_file" ]] || [[ ! -f "$config_file" ]]; then
         source_base_compute_chain
@@ -84,7 +85,6 @@ source_base_load_config() {
             case "$key" in
                 DEFAULT_QUALITY) SOURCE_BASE_DEFAULT_QUALITY="$value" ;;
                 QUALITY_MODE)    SOURCE_BASE_QUALITY_MODE="$value" ;;
-                SKIP_UNAVAILABLE_QUALITY) SOURCE_BASE_SKIP_UNAVAILABLE="$value" ;;
             esac
         fi
     done < "$config_file"

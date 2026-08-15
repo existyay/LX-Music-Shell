@@ -6,7 +6,7 @@
 set -e
 
 # shellcheck disable=SC2034  # 版本变量,供未来更新检查使用
-VERSION="2.3.0"
+VERSION="3.0.0"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="${HOME}/.config/lx-music-shell"
 MAN_DIR="/usr/local/share/man/man1"
@@ -47,6 +47,19 @@ else
     exit 1
 fi
 
+# 安装 TUI 模块和音乐源 (到 /usr/share/lx-music-shell)
+echo "安装 TUI 模块和音乐源..."
+SHARE_DIR="/usr/share/lx-music-shell"
+mkdir -p "$SHARE_DIR/lib" "$SHARE_DIR/sources"
+if [[ -d "$SCRIPT_DIR/lib" ]]; then
+    cp -f "$SCRIPT_DIR"/lib/*.sh "$SCRIPT_DIR"/lib/*.py "$SHARE_DIR/lib/" 2>/dev/null || true
+    echo "  ✓ lib -> $SHARE_DIR/lib"
+fi
+if [[ -d "$SCRIPT_DIR/sources" ]]; then
+    cp -f "$SCRIPT_DIR"/sources/*.sh "$SHARE_DIR/sources/" 2>/dev/null || true
+    echo "  ✓ sources -> $SHARE_DIR/sources"
+fi
+
 # 安装配置文件
 echo "安装配置文件..."
 if [[ ! -f "$CONFIG_DIR/config" ]]; then
@@ -57,7 +70,7 @@ if [[ ! -f "$CONFIG_DIR/config" ]]; then
 PLAYER_BACKEND="mpv"
 
 # 默认音乐源
-DEFAULT_SOURCE="kugou"
+DEFAULT_SOURCE="netease"
 
 # 搜索结果数量限制
 SEARCH_LIMIT="20"

@@ -83,13 +83,14 @@ run_set_source() {
 
 run_do_search_mock() {
   PLAYLIST=()
+  LXMS_PLAYLIST=()
   local output_file
   output_file=$(mktemp)
   do_search "测试" "kugou" 2 >"$output_file" 2>&1
   local output
   output=$(<"$output_file")
   rm -f "$output_file"
-  assert_contains "使用酷狗音乐搜索" "$output" "do_search should call search_kugou"
+  assert_contains "找到" "$output" "do_search should report result count"
   assert_eq "2" "${#PLAYLIST[@]}" "mock search should add two tracks"
 }
 

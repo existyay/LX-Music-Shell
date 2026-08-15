@@ -16,13 +16,50 @@
 ## [未发布]
 
 ### 计划中
-- 歌词显示功能 (/lyric 命令, 实现 lx_api_get_lyric_impl)
+- 更多音源真实搜索端点 (依赖完整 lxserver 用户)
 - 播放队列管理 (/queue 命令)
-- 真实搜索端点集成 (依赖完整 lxserver 用户)
-- 频谱可视化 (lib/spectrum.py + ffmpeg)
-- go-musicfox 全部 16 个子菜单实现 (当前仅 search 真正可用)
+- 桌面歌词 (desktop lyrics)
 
 ---
+
+## [3.0.0] - 2026-08-16
+
+### 重构 (Major Architecture Overhaul)
+
+#### 真实播放 (mpv JSON IPC 后端)
+- 新增 `lib/mpv_ipc.py` (纯 python3 客户端, 无 socat/nc 依赖)
+- 新增 `lib/player.sh` 后端: 真实进度/时长 (time-pos/duration)、
+  真实暂停/继续 (pause 属性)、seek、音量 (volume 属性)、曲目结束 (eof-reached)
+- 取代旧的 `kill -STOP/-CONT` + 墙钟计时 (进度不再靠猜)
+
+#### 统一 TUI (单一状态机)
+- 重写 `lib/tui.sh`: 屏幕状态机 (menu/search/help)
+- 完整 go-musicfox 视觉: 顶红标题线 / 副标题 / 菜单 / 结果列表 /
+  歌词 (bash 原生 LRC 解析) / 频谱 (纯 bash 动画) / 播放栏 / 真实进度条
+- 删除冗余 `lib/tui_fox.sh` (与 tui.sh 合并)
+
+#### 键盘 + 鼠标双输入
+- vim 风格键盘: j/k/g/G/Enter/Space/n/p/m/s/c/+/-/q
+- SGR 1006 鼠标: 点击列表播放 / 点击菜单 / 点击搜索框聚焦 /
+  点击进度条 seek / 点击播放栏暂停切歌 / 滚轮滚动
+- 修复鼠标移动误判为点击的 bug (SGR button bit 5 过滤)
+
+#### 网易云真实源
+- 新增 `sources/netease.sh`: 真实搜索 (实测可用)、真实歌词、
+  封面 (img1v1Url)、播放 URL (尽力而为, 版权曲目受限)
+- 默认音源改为 netease (原先 kugou 默认走已失效的公益 API)
+
+#### 打包修复
+- PKGBUILD / install.sh 现在安装 `lib/` 与 `sources/` 到 `/usr/share/lx-music-shell/`
+  (此前 AUR 安装后 TUI 模块缺失)
+
+#### 测试
+- 新增 `tests/test_player.sh` (mpv IPC 集成, 11 断言)
+- 重写 `test_tui.sh` (44 断言) / `test_playlist.sh` (10 断言)
+- 更新 `test_input.sh` (q/Q 改为 KEY_CHAR, 鼠标移动过滤)
+- shellcheck 0 error / 0 warning
+
+
 
 ## [2.3.0] - 2026-07-28
 

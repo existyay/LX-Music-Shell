@@ -58,6 +58,7 @@ declare -a INPUT_REGIONS=()      # 每个区域一行: "name|row|col|height|widt
 INPUT_LAST_CLICK_X=0
 INPUT_LAST_CLICK_Y=0
 INPUT_LAST_CLICK_TIME=0
+INPUT_HIT_REGION=""              # 最近一次命中测试的区域名
 
 #==============================================================================
 # 区域注册 - 供 TUI 模块调用
@@ -94,7 +95,6 @@ input_parse_keyboard() {
         ' ')           EVENT_TYPE=$EVENT_KEY_SPACE; return 0 ;;
         $'\177'|$'\b') EVENT_TYPE=$EVENT_KEY_BACKSPACE; return 0 ;;
         $'\033')       EVENT_TYPE=$EVENT_KEY_ESC; return 0 ;;
-        q|Q)           EVENT_TYPE=$EVENT_KEY_QUIT; return 0 ;;
     esac
 
     # ANSI 转义序列 (e.g., \033[A = Up Arrow)
@@ -167,6 +167,14 @@ input_parse_mouse() {
             return 0
         fi
 
+        # 忽略移动/拖拽事件 (SGR 按钮 bit 5 = 32 表示 motion)
+        # 避免把拖拽误判为点击
+        if (( button & 32 )); then
+            EVENT_TYPE=$EVENT_NONE
+            EVENT_DATA=""
+            return 0
+        fi
+
         # 释放事件
         if [[ "$action" == "m" ]]; then
             EVENT_TYPE=$EVENT_MOUSE_RELEASE
@@ -206,11 +214,17 @@ input_parse_mouse() {
 # 区域命中测试
 #
 # 输入: 鼠标坐标 (x, y)
-# 输出: 命中的区域名 (如果没有返回 "")
+# 输出 (全局变量, 避免子 shell 丢失):
+#   INPUT_HIT_REGION - 命中的区域名 (未命中 = "")
+#   EVENT_DATA       - 区域内坐标 "local_x,local_y"
+# 返回: 0 命中, 1 未命中
 #==============================================================================
 input_mouse_to_action() {
     local x="$1"
     local y="$2"
+
+    INPUT_HIT_REGION=""
+    EVENT_DATA=""
 
     for region in "${INPUT_REGIONS[@]}"; do
         IFS='|' read -r name row col height width <<< "$region"
@@ -222,8 +236,9 @@ input_mouse_to_action() {
             # 找到区域,计算内部坐标
             local local_y=$((y - row))
             local local_x=$((x - col))
+            # shellcheck disable=SC2034  # 命中区域供 tui 读取
+            INPUT_HIT_REGION="$name"
             EVENT_DATA="${local_x},${local_y}"
-            printf '%s\n' "$name"
             return 0
         fi
     done
@@ -241,9 +256,13 @@ input_mouse_to_action() {
 input_read_event() {
     local timeout="${1:-0.1}"
 
+    # shellcheck disable=SC2034  # 事件输出变量供主循环读取
     EVENT_TYPE=$EVENT_NONE
+    # shellcheck disable=SC2034
     EVENT_DATA=""
+    # shellcheck disable=SC2034
     EVENT_DATA_X=0
+    # shellcheck disable=SC2034
     EVENT_DATA_Y=0
 
     # 读取第一个字节
@@ -314,13 +333,13 @@ _input_write_tty_or_stdout() {
 }
 
 input_enable_mouse() {
-    # 启用 SGR 鼠标模式 + 报告所有按钮事件
-    _input_write_tty_or_stdout '\033[?1006h\033[?1003h'
+    # 启用 SGR 鼠标模式 + 按钮事件 (按下/释放/拖拽, 不含裸移动)
+    _input_write_tty_or_stdout '\033[?1006h\033[?1002h'
 }
 
 input_disable_mouse() {
     # 关闭 SGR 鼠标模式
-    _input_write_tty_or_stdout '\033[?1006l\033[?1003l'
+    _input_write_tty_or_stdout '\033[?1006l\033[?1002l'
 }
 
 #==============================================================================
@@ -328,27 +347,27 @@ input_disable_mouse() {
 #==============================================================================
 input_event_name() {
     case "$1" in
-        $EVENT_NONE)                printf 'NONE' ;;
-        $EVENT_KEY_UP)              printf 'KEY_UP' ;;
-        $EVENT_KEY_DOWN)            printf 'KEY_DOWN' ;;
-        $EVENT_KEY_LEFT)            printf 'KEY_LEFT' ;;
-        $EVENT_KEY_RIGHT)           printf 'KEY_RIGHT' ;;
-        $EVENT_KEY_ENTER)           printf 'KEY_ENTER' ;;
-        $EVENT_KEY_TAB)             printf 'KEY_TAB' ;;
-        $EVENT_KEY_SPACE)           printf 'KEY_SPACE' ;;
-        $EVENT_KEY_QUIT)            printf 'KEY_QUIT' ;;
-        $EVENT_KEY_PAGE_UP)         printf 'KEY_PAGE_UP' ;;
-        $EVENT_KEY_PAGE_DOWN)       printf 'KEY_PAGE_DOWN' ;;
-        $EVENT_KEY_HOME)            printf 'KEY_HOME' ;;
-        $EVENT_KEY_END)             printf 'KEY_END' ;;
-        $EVENT_KEY_BACKSPACE)       printf 'KEY_BACKSPACE' ;;
-        $EVENT_KEY_CHAR)            printf 'KEY_CHAR' ;;
-        $EVENT_KEY_ESC)             printf 'KEY_ESC' ;;
-        $EVENT_MOUSE_CLICK)         printf 'MOUSE_CLICK' ;;
-        $EVENT_MOUSE_DOUBLE)        printf 'MOUSE_DOUBLE' ;;
-        $EVENT_MOUSE_SCROLL_UP)     printf 'MOUSE_SCROLL_UP' ;;
-        $EVENT_MOUSE_SCROLL_DOWN)   printf 'MOUSE_SCROLL_DOWN' ;;
-        $EVENT_MOUSE_RELEASE)       printf 'MOUSE_RELEASE' ;;
+        "$EVENT_NONE")                printf 'NONE' ;;
+        "$EVENT_KEY_UP")              printf 'KEY_UP' ;;
+        "$EVENT_KEY_DOWN")            printf 'KEY_DOWN' ;;
+        "$EVENT_KEY_LEFT")            printf 'KEY_LEFT' ;;
+        "$EVENT_KEY_RIGHT")           printf 'KEY_RIGHT' ;;
+        "$EVENT_KEY_ENTER")           printf 'KEY_ENTER' ;;
+        "$EVENT_KEY_TAB")             printf 'KEY_TAB' ;;
+        "$EVENT_KEY_SPACE")           printf 'KEY_SPACE' ;;
+        "$EVENT_KEY_QUIT")            printf 'KEY_QUIT' ;;
+        "$EVENT_KEY_PAGE_UP")         printf 'KEY_PAGE_UP' ;;
+        "$EVENT_KEY_PAGE_DOWN")       printf 'KEY_PAGE_DOWN' ;;
+        "$EVENT_KEY_HOME")            printf 'KEY_HOME' ;;
+        "$EVENT_KEY_END")             printf 'KEY_END' ;;
+        "$EVENT_KEY_BACKSPACE")       printf 'KEY_BACKSPACE' ;;
+        "$EVENT_KEY_CHAR")            printf 'KEY_CHAR' ;;
+        "$EVENT_KEY_ESC")             printf 'KEY_ESC' ;;
+        "$EVENT_MOUSE_CLICK")         printf 'MOUSE_CLICK' ;;
+        "$EVENT_MOUSE_DOUBLE")        printf 'MOUSE_DOUBLE' ;;
+        "$EVENT_MOUSE_SCROLL_UP")     printf 'MOUSE_SCROLL_UP' ;;
+        "$EVENT_MOUSE_SCROLL_DOWN")   printf 'MOUSE_SCROLL_DOWN' ;;
+        "$EVENT_MOUSE_RELEASE")       printf 'MOUSE_RELEASE' ;;
         *)                          printf 'UNKNOWN(%s)' "$1" ;;
     esac
 }
