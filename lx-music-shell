@@ -15,7 +15,7 @@
 #==============================================================================
 
 # 版本信息
-VERSION="3.0.0"
+VERSION="3.0.1"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
@@ -330,6 +330,7 @@ format_custom_search_url() {
     printf '%s' "$search_url"
 }
 
+# 自定义源搜索: 拉取并解析 JSON 响应, 输出标准 6 列 (name|artist|album|duration|song_id|cover)
 search_custom_source() {
     local query="$1"
     local source="$2"
@@ -337,26 +338,67 @@ search_custom_source() {
     local url_template="${SOURCE_URLS[$source]}"
 
     if [[ -z "$query" ]] || [[ -z "$url_template" ]]; then
-        echo -e "\033[31m错误: 无效的自定义源搜索\033[0m"
         return 1
     fi
 
-    local search_url
+    local search_url resp
     search_url=$(format_custom_search_url "$query" "$source" "$limit")
+    resp=$(curl -s --connect-timeout 8 --max-time 20 "$search_url" 2>/dev/null)
+    [[ -z "$resp" ]] && return 1
 
-    echo -e "\033[33m使用自定义源 '$source' 搜索...\033[0m"
-    local resp
-    resp=$(curl -s --connect-timeout 10 "$search_url" 2>/dev/null)
-    if [[ -z "$resp" ]]; then
-        echo -e "\033[31m错误: 自定义源请求失败\033[0m"
-        return 1
-    fi
-
-    echo ""
-    echo "======== 自定义源响应预览 ========"
-    echo "${resp}" | head -n 20
-    echo "================================="
-    echo "提示: 自定义源结果不一定能自动解析播放链接。"
+    # 用 python3 泛化解析常见 JSON 响应 (无 jq 依赖)
+    printf '%s' "$resp" | python3 -c '
+import sys, json
+def fmt_dur(ms):
+    try:
+        s = int(ms) // 1000
+    except Exception:
+        return "00:00"
+    if s < 0:
+        return "00:00"
+    return "%02d:%02d" % (s // 60, s % 60)
+def g(item, *keys):
+    for k in keys:
+        v = item.get(k)
+        if v is not None and v != "":
+            return v
+    return ""
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+songs = None
+if isinstance(d, list):
+    songs = d
+elif isinstance(d, dict):
+    for k in ("data", "songs", "list", "result", "results", "tracks", "songList"):
+        v = d.get(k)
+        if isinstance(v, list):
+            songs = v; break
+    if songs is None:
+        for outer in (d.get("data"), d.get("result")):
+            if isinstance(outer, dict):
+                for k in ("songs", "list", "tracks", "songList"):
+                    if isinstance(outer.get(k), list):
+                        songs = outer[k]; break
+            if songs:
+                break
+if not songs:
+    sys.exit(1)
+for item in songs:
+    if not isinstance(item, dict):
+        continue
+    name = g(item, "name", "songname", "songName", "title", "song", "trackName") or "未知"
+    artist = g(item, "singer", "artist", "author", "singerName", "artists", "artistName")
+    if isinstance(artist, list):
+        artist = (artist[0].get("name") if isinstance(artist[0], dict) else artist[0]) if artist else ""
+    artist = artist or "未知歌手"
+    album = g(item, "album", "albumName", "albumname", "collectionName") or ""
+    dur = fmt_dur(g(item, "duration", "Duration", "interval", "dt", "trackTimeMillis", 0))
+    sid = str(g(item, "id", "songId", "songid", "rid", "hash", "songmid", "song_id", "trackId") or "")
+    cover = g(item, "picUrl", "cover", "coverUrl", "albumPic", "img", "pic", "artworkUrl100") or ""
+    print("|".join([name, artist, album, dur, sid, cover]))
+' 2>/dev/null | head -n "$limit"
 }
 
 set_source() {
@@ -569,7 +611,12 @@ do_play() {
 
     # 解析真实播放 URL (音质回退链)
     if [[ -z "$url" ]] || [[ "$url" == "null" ]]; then
-        if declare -F source_base_get_play_url >/dev/null 2>&1; then
+        # 1) song_id 本身若是可直接播放的 URL (某些自定义源直接返回), 直接使用
+        if [[ "$song_id" == http* ]]; then
+            url="$song_id"
+            quality="--"
+        # 2) 源框架解析 (内置源: netease 直连 / kugou..migu 走 LX API)
+        elif declare -F source_base_get_play_url >/dev/null 2>&1; then
             local qr
             qr=$(source_base_get_play_url "$src" "$song_id" "${DEFAULT_QUALITY:-flac}" 2>/dev/null)
             quality="${qr%%:*}"
@@ -957,8 +1004,12 @@ search_append_source() {
     local src results
     src=$(normalize_source_id "$source")
     results=""
+    # 1) 内置源优先 (有注册搜索函数: netease 直连 / kugou..migu 走 LX API)
     if declare -F "${src}_search" >/dev/null 2>&1; then
         results=$("${src}_search" "$query" "$limit" 2>/dev/null)
+    # 2) 否则若是用户自定义源 (在 sources.list 配置的 URL 模板)
+    elif [[ -n "${SOURCE_URLS[$source]:-}" ]]; then
+        results=$(search_custom_source "$query" "$source" "$limit" 2>/dev/null)
     fi
     [[ -z "$results" ]] && results=$(search_mock_emit "$src" "$query" "$limit" 2>/dev/null)
 
@@ -995,8 +1046,8 @@ do_search() {
         return 1
     fi
 
-    # 第二参数是已知源名 -> 指定源; 数字 -> limit
-    if [[ -n "$2" ]] && [[ "$2" =~ ^(netease|wy|kg|kugou|kw|kuwo|tx|qq|mg|migu|all|ximalaya)$ ]]; then
+    # 第二参数是内置源名或已配置的自定义源名 -> 指定源; 数字 -> limit
+    if [[ -n "$2" ]] && { [[ "$2" =~ ^(netease|wy|kg|kugou|kw|kuwo|tx|qq|mg|migu|all|ximalaya)$ ]] || [[ -n "${SOURCE_URLS[$2]:-}" ]]; }; then
         source="$2"
         [[ -n "$3" ]] && [[ "$3" =~ ^[0-9]+$ ]] && limit="$3"
     elif [[ -n "$2" ]] && [[ "$2" =~ ^[0-9]+$ ]]; then
@@ -1022,7 +1073,13 @@ do_search() {
             qq|tx)      CURRENT_SOURCE_NAME="QQ音乐" ;;
             migu|mg)    CURRENT_SOURCE_NAME="咪咕音乐" ;;
             ximalaya)   CURRENT_SOURCE_NAME="喜马拉雅" ;;
-            *)          CURRENT_SOURCE_NAME="$source" ;;
+            *)
+                if [[ -n "${SOURCE_URLS[$source]:-}" ]]; then
+                    CURRENT_SOURCE_NAME="自定义源 $source"
+                else
+                    CURRENT_SOURCE_NAME="$source"
+                fi
+                ;;
         esac
     fi
 
@@ -1660,6 +1717,8 @@ interactive_mode_tui() {
 
     if supports_mouse; then input_enable_mouse; fi
     tui_enter
+    # 终端 resize 时清屏一次 (tui.sh 内部处理), 避免旧尺寸残留
+    trap 'tui_on_resize' WINCH
 
     local running=1 ev_type ev_data ev_x ev_y
     while [[ $running -eq 1 ]] && [[ "${UI_QUIT:-0}" != "1" ]]; do
@@ -1732,6 +1791,7 @@ interactive_mode_tui() {
     done
 
     if supports_mouse; then input_disable_mouse; fi
+    trap - WINCH 2>/dev/null || true
     do_stop
     tui_cleanup
     LXMS_TUI_ACTIVE=0

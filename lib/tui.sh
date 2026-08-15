@@ -54,6 +54,7 @@ readonly T_SHOW_CURSOR="${_T_ESC}[?25h"
 readonly T_ALT_ON="${_T_ESC}[?1049h"
 readonly T_ALT_OFF="${_T_ESC}[?1049l"
 readonly T_CLR="${_T_ESC}[2J${_T_ESC}[H"
+readonly T_HOME="${_T_ESC}[H"
 readonly T_CLR_LINE="${_T_ESC}[2K"
 
 #==============================================================================
@@ -607,14 +608,29 @@ tui_enter() {
 }
 
 #==============================================================================
-# 主渲染 (每帧调用: 清屏重绘)
+# 主渲染 (每帧调用: 增量重绘, 不清全屏避免闪烁)
+#
+# 只用光标归位 (T_HOME), 每行绘制前用 T_CLR_LINE 清行,
+# 不做 \033[2J 全屏清屏, 消除逐帧闪屏。
+# 仅当终端 resize (SIGWINCH) 时做一次全屏清屏, 清除旧尺寸残留。
 #==============================================================================
+TUI_NEED_CLEAR=0
+
+tui_on_resize() {
+    TUI_NEED_CLEAR=1
+}
+
 tui_render() {
     local cols lines
     cols=$(tui_cols)
     lines=$(tui_lines)
 
-    printf '%s' "${T_CLR}"
+    if [[ "${TUI_NEED_CLEAR:-0}" == "1" ]]; then
+        printf '%s' "${T_CLR}"
+        TUI_NEED_CLEAR=0
+    else
+        printf '%s' "${T_HOME}"
+    fi
 
     # 布局: 顶部 2 行 + 底部常驻区
     tui_render_topline
