@@ -33,7 +33,8 @@ echo -e "${GREEN}✓ SSH key 已配置: $SSH_KEY${NC}"
 # 2. 测试 SSH 连接
 echo ""
 echo "测试 AUR 连接..."
-SSH_OUTPUT=$(ssh -i "$SSH_KEY" -T -o StrictHostKeyChecking=no aur@aur.archlinux.org 2>&1)
+# AUR 的 SSH 认证成功后返回非零退出码 (交互 shell 被禁用), 用 || true 避免 set -e 退出
+SSH_OUTPUT=$(ssh -i "$SSH_KEY" -T -o StrictHostKeyChecking=no aur@aur.archlinux.org 2>&1 || true)
 if echo "$SSH_OUTPUT" | grep -q "Permission denied"; then
     echo -e "${RED}✗ AUR SSH 连接失败${NC}"
     echo ""
@@ -86,17 +87,11 @@ git add PKGBUILD .SRCINFO lx-music-shell.install lx-music-shell.1 \
         lx-music-sources.1 lx-music-shell-uninstall.1 \
         lx-music-shell.bash lx-music-shell.desktop
 
-git commit -m "Update to lx-music-shell v1.1.1
+git commit -m "Update to v3.0.0
 
-A pure shell terminal music player with multi-source support
-including auto-reconnect on network/bluetooth disconnection.
-
-Improvements over v1.1.0:
-- Clean up all shellcheck warnings (0 errors, 0 warnings)
-- Add dedicated man pages for lx-music-sources and uninstaller
-- Add proper Maintainer field in PKGBUILD
-- Fix source filename uniqueness for namcap
-- Various code cleanups"
+Unified TUI (menu/search) with mouse + keyboard input, real playback
+via mpv JSON IPC, netease direct source, and proper lib/sources
+packaging. See CHANGELOG for details."
 
 # 6. 推送
 echo ""
