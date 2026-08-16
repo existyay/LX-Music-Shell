@@ -15,7 +15,7 @@
 #==============================================================================
 
 # 版本信息
-VERSION="3.13.3"
+VERSION="3.13.4"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
@@ -838,6 +838,11 @@ fetch_cover_async() {
         curl -s --connect-timeout 6 --max-time 15 -o "$out" "$cover" 2>/dev/null || rm -f "$out"
     fi
     if [[ -s "$out" ]]; then
+        # 转出 PNG 供 kitty 原生图形协议使用 (f=100 PNG)
+        local png="${out%.jpg}.png"
+        if [[ ! -s "$png" ]] && command -v ffmpeg >/dev/null 2>&1; then
+            ffmpeg -v error -i "$out" -frames:v 1 "$png" >/dev/null 2>&1 || rm -f "$png"
+        fi
         touch "$out.ready"
     fi
 }
@@ -2503,10 +2508,11 @@ interactive_mode_tui() {
             TUI_DIRTY=1
         fi
         if [[ -n "${LXMS_PENDING_COVER:-}" && -f "${LXMS_PENDING_COVER}.ready" ]]; then
-            if [[ -s "$LXMS_PENDING_COVER" ]]; then
-                # shellcheck disable=SC2034  # TUI_COVER_FILE 供 lib/tui.sh 封面渲染
-                TUI_COVER_FILE="$LXMS_PENDING_COVER"
-            fi
+            # shellcheck disable=SC2034  # TUI_COVER_FILE 供 lib/tui.sh 封面渲染
+            TUI_COVER_FILE="$LXMS_PENDING_COVER"
+            local cover_png="${LXMS_PENDING_COVER%.jpg}.png"
+            # shellcheck disable=SC2034  # 同上
+            [[ -s "$cover_png" ]] && TUI_COVER_FILE="$cover_png"
             LXMS_PENDING_COVER=""
             TUI_DIRTY=1
         fi
