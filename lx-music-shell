@@ -15,7 +15,7 @@
 #==============================================================================
 
 # 版本信息
-VERSION="3.2.0"
+VERSION="3.2.1"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
@@ -2131,10 +2131,15 @@ interactive_mode_tui() {
 
     local running=1 ev_type ev_data ev_x ev_y
     local snap_status="" snap_pos="" snap_dur="" snap_track="" snap_mode="" snap_vol="" snap_net="" snap_src="" snap_qual=""
+    local poll_counter=0
     TUI_DIRTY=1
     while [[ $running -eq 1 ]] && [[ "${UI_QUIT:-0}" != "1" ]]; do
         # 同步播放器真实状态 + 曲目结束自动下一首
-        player_poll >/dev/null 2>&1 || true
+        # 每 3 个循环 (~0.6s) 轮询一次 mpv, 降低播放时的 python 子进程开销
+        if (( (poll_counter % 3) == 0 )); then
+            player_poll >/dev/null 2>&1 || true
+        fi
+        poll_counter=$((poll_counter + 1))
         if [[ "${PLAYER_EOF:-0}" == "1" ]]; then
             PLAYER_EOF=0
             handle_playback_end
@@ -2226,6 +2231,7 @@ interactive_mode_tui() {
         save_player_background_state
         stop_watchdog
         stop_status_bar
+        printf '\n'
     else
         do_stop
     fi

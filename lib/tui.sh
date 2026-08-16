@@ -578,14 +578,16 @@ tui_render_playbar() {
     tui_blank_row "$row"
     tui_goto "$row" 1
 
-    # 模式
+    # 模式 | 音量 | 状态图标 | 当前曲目
     printf ' %s[%s]%s ' "${T_FG_PINK}" "$(tui_mode_name)" "${T_RESET}"
-    # 音量
+    printf '%s│%s ' "${T_DIM}${T_FG_GRAY}" "${T_RESET}"
     printf '%s🔊%d%%%s ' "${T_FG_GREEN}" "${VOLUME:-80}" "${T_RESET}"
-    # 状态图标
+    printf '%s│%s ' "${T_DIM}${T_FG_GRAY}" "${T_RESET}"
+
     local icon="♫ ♪ ♫ ♪"
     [[ "${PLAYER_STATUS:-stopped}" != "playing" ]] && icon="_ z Z Z"
     printf '%s%s%s ' "${T_FG_YELLOW}" "$icon" "${T_RESET}"
+    printf '%s│%s ' "${T_DIM}${T_FG_GRAY}" "${T_RESET}"
 
     # 当前曲目 (列表优先; 后台播放/无列表时回退到 CURRENT_TRACK)
     local name="(未播放)" artist=""
@@ -598,7 +600,7 @@ tui_render_playbar() {
         name="${CURRENT_TRACK}"
         artist=""
     fi
-    local avail=$((cols - 30))
+    local avail=$((cols - 44))
     [[ $avail -lt 8 ]] && avail=8
     printf '%s%s%s' "${T_BOLD}${T_FG_CYAN}" "$(tui_trunc "$name" "$avail")" "${T_RESET}"
     if [[ -n "$artist" ]]; then
@@ -711,6 +713,9 @@ tui_render() {
     local cols lines
     cols=$(tui_cols)
     lines=$(tui_lines)
+    # 缓存尺寸, 本次渲染内的 tui_cols/tui_lines 不再重复调用 tput
+    COLUMNS="$cols"
+    LINES="$lines"
 
     local screen_changed=0
     if [[ "${UI_SCREEN:-menu}" != "${TUI_LAST_SCREEN:-}" || "$lines" != "${TUI_LAST_LINES:-0}" || "$cols" != "${TUI_LAST_COLS:-0}" ]]; then
@@ -781,8 +786,8 @@ tui_render_help() {
         "  切歌:  n 下一首 / p 上一首"
         "  音量:  + / - 调节"
         "  模式:  m 循环播放模式"
-        "  音源:  s 切换音源, q 切换音质"
-        "  退出:  q 或 Ctrl-C"
+        "  音源:  s 切换音源, c 切换音质"
+        "  退出:  q / Esc / Ctrl-C"
     )
     local i
     for ((i = 0; i < ${#lines[@]}; i++)); do
