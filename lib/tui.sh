@@ -344,9 +344,14 @@ tui_render_search_input() {
     if ((focused)); then
         prompt="${T_BG_BLUE}${T_FG_WHITE}"
         printf '%s' "${T_FG_CYAN}${T_BOLD}▸${T_RESET} "
-        local q
-        q="$(tui_trunc "${UI_QUERY:-}" $((cols - 24)))"
-        printf '%s%s%s' "$prompt" "$q" "${T_RESET}"
+        local q cur before after
+        q="${UI_QUERY:-}"
+        cur="${UI_QUERY_CURSOR:-0}"
+        (( cur < 0 )) && cur=0
+        (( cur > ${#q} )) && cur=${#q}
+        before="$(tui_trunc "${q:0:cur}" $((cols - 26)))"
+        after="$(tui_trunc "${q:cur}" $((cols - 26)))"
+        printf '%s%s%s%s%s' "$prompt" "$before" "${T_BG_BLUE}${T_FG_WHITE}▏${T_RESET}" "$after" "${T_RESET}"
         printf '%s|%s' "${T_FG_CYAN}${T_BOLD}" "${T_RESET}"
     else
         if [[ -z "${UI_QUERY:-}" ]]; then
@@ -1209,6 +1214,7 @@ tui_op_start_search() {
     UI_SCREEN="search"
     UI_FOCUS="search"
     UI_QUERY=""
+    UI_QUERY_CURSOR=0
     UI_SEARCH_MODE="song"
     UI_SELECTED=0
     UI_SCROLL_TOP=0
@@ -1218,21 +1224,66 @@ tui_op_start_playlist_search() {
     UI_SCREEN="search"
     UI_FOCUS="search"
     UI_QUERY=""
+    UI_QUERY_CURSOR=0
     UI_SEARCH_MODE="playlist"
     UI_SELECTED=0
     UI_SCROLL_TOP=0
 }
 
-# 在搜索框追加字符
+# 在搜索框光标处插入字符
 tui_op_search_append() {
-    local ch="$1"
+    local ch="$1" cur
     UI_FOCUS="search"
-    UI_QUERY="${UI_QUERY}${ch}"
+    cur="${UI_QUERY_CURSOR:-0}"
+    UI_QUERY="${UI_QUERY:0:cur}${ch}${UI_QUERY:cur}"
+    UI_QUERY_CURSOR=$((cur + ${#ch}))
 }
 
+# 删除光标前一个字符
 tui_op_search_backspace() {
+    local cur
     UI_FOCUS="search"
-    UI_QUERY="${UI_QUERY%?}"
+    cur="${UI_QUERY_CURSOR:-0}"
+    if (( cur > 0 )); then
+        UI_QUERY="${UI_QUERY:0:cur-1}${UI_QUERY:cur}"
+        UI_QUERY_CURSOR=$((cur - 1))
+    fi
+}
+
+# 删除光标后一个字符 (Delete)
+tui_op_search_delete() {
+    local cur len
+    UI_FOCUS="search"
+    cur="${UI_QUERY_CURSOR:-0}"
+    len=${#UI_QUERY}
+    if (( cur < len )); then
+        UI_QUERY="${UI_QUERY:0:cur}${UI_QUERY:cur+1}"
+    fi
+}
+
+tui_op_search_left() {
+    local cur
+    UI_FOCUS="search"
+    cur="${UI_QUERY_CURSOR:-0}"
+    (( cur > 0 )) && UI_QUERY_CURSOR=$((cur - 1))
+}
+
+tui_op_search_right() {
+    local cur len
+    UI_FOCUS="search"
+    cur="${UI_QUERY_CURSOR:-0}"
+    len=${#UI_QUERY}
+    (( cur < len )) && UI_QUERY_CURSOR=$((cur + 1))
+}
+
+tui_op_search_home() {
+    UI_FOCUS="search"
+    UI_QUERY_CURSOR=0
+}
+
+tui_op_search_end() {
+    UI_FOCUS="search"
+    UI_QUERY_CURSOR=${#UI_QUERY}
 }
 
 # 退出搜索/选择子菜单 (回到菜单)
@@ -1241,6 +1292,7 @@ tui_op_search_cancel() {
         UI_SCREEN="menu"
         UI_FOCUS="list"
         UI_QUERY=""
+        UI_QUERY_CURSOR=0
         UI_SEARCH_MODE="song"
         UI_SELECTED=0
         UI_SCROLL_TOP=0

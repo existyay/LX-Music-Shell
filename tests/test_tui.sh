@@ -143,6 +143,18 @@ tui_op_move_down; assert_eq "search move_down 0->1" "1" "$UI_SELECTED"
 tui_op_move_down; tui_op_move_down; assert_eq "search move_down clamp 2" "2" "$UI_SELECTED"
 tui_op_move_top; assert_eq "search move_top" "0" "$UI_SELECTED"
 
+# 搜索框光标操作
+UI_SCREEN=search; UI_FOCUS=search; UI_QUERY="abc"; UI_QUERY_CURSOR=1
+tui_op_search_append "X"; assert_eq "光标插入 X" "aXbc" "$UI_QUERY"
+assert_eq "光标后移" "2" "$UI_QUERY_CURSOR"
+tui_op_search_backspace; assert_eq "退格删除 X" "abc" "$UI_QUERY"
+assert_eq "光标前移" "1" "$UI_QUERY_CURSOR"
+tui_op_search_right; tui_op_search_right; assert_eq "右移到末尾" "3" "$UI_QUERY_CURSOR"
+tui_op_search_left; assert_eq "左移一位" "2" "$UI_QUERY_CURSOR"
+tui_op_search_delete; assert_eq "Delete 删除右侧" "ab" "$UI_QUERY"
+tui_op_search_home; assert_eq "Home 光标归零" "0" "$UI_QUERY_CURSOR"
+tui_op_search_end; assert_eq "End 光标末尾" "2" "$UI_QUERY_CURSOR"
+
 UI_SCREEN=quality_select
 TUI_SELECT_ITEMS=("HiRes (母带)" "FLAC (无损)" "HQ (320k)" "SQ (128k)")
 UI_SELECTED=0; UI_SCROLL_TOP=0

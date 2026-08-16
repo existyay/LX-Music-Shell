@@ -15,7 +15,7 @@
 #==============================================================================
 
 # 版本信息
-VERSION="3.9.0"
+VERSION="3.10.0"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
@@ -2525,6 +2525,11 @@ interactive_mode_tui() {
                 "$EVENT_KEY_ESC")        tui_op_search_cancel ;;
                 "$EVENT_KEY_ENTER")      tui_confirm_search ;;
                 "$EVENT_KEY_BACKSPACE")  tui_op_search_backspace ;;
+                "$EVENT_KEY_DELETE")     tui_op_search_delete ;;
+                "$EVENT_KEY_LEFT")       tui_op_search_left ;;
+                "$EVENT_KEY_RIGHT")      tui_op_search_right ;;
+                "$EVENT_KEY_HOME")       tui_op_search_home ;;
+                "$EVENT_KEY_END")        tui_op_search_end ;;
                 "$EVENT_KEY_SPACE")      tui_op_search_append " " ;;
                 "$EVENT_KEY_CHAR")       tui_op_search_append "$ev_data" ;;
                 "$EVENT_MOUSE_CLICK"|"$EVENT_MOUSE_DOUBLE") tui_handle_click "$ev_x" "$ev_y" ;;

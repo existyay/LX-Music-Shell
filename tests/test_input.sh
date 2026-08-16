@@ -95,6 +95,9 @@ test_function_keys() {
     input_parse_keyboard 'Q'
     assert_eq "Q 键返回 KEY_CHAR" "$EVENT_KEY_CHAR" "$EVENT_TYPE"
     assert_eq "Q 键数据" "Q" "$EVENT_DATA"
+
+    input_parse_keyboard $'\033[3~'
+    assert_eq "Delete 键" "$EVENT_KEY_DELETE" "$EVENT_TYPE"
 }
 
 #==============================================================================

@@ -44,6 +44,7 @@ readonly EVENT_KEY_END=12
 readonly EVENT_KEY_BACKSPACE=13
 readonly EVENT_KEY_CHAR=14
 readonly EVENT_KEY_ESC=15
+readonly EVENT_KEY_DELETE=16
 
 readonly EVENT_MOUSE_CLICK=100
 readonly EVENT_MOUSE_DOUBLE=101
@@ -121,6 +122,9 @@ input_parse_keyboard() {
         return 0
     elif [[ "$seq" == $'\033'[4~ ]] || [[ "$seq" == $'\033'[8~ ]] || [[ "$seq" == $'\033'[F ]]; then
         EVENT_TYPE=$EVENT_KEY_END
+        return 0
+    elif [[ "$seq" == $'\033'[3~ ]]; then
+        EVENT_TYPE=$EVENT_KEY_DELETE
         return 0
     fi
 
@@ -371,6 +375,7 @@ input_event_name() {
         "$EVENT_KEY_BACKSPACE")       printf 'KEY_BACKSPACE' ;;
         "$EVENT_KEY_CHAR")            printf 'KEY_CHAR' ;;
         "$EVENT_KEY_ESC")             printf 'KEY_ESC' ;;
+        "$EVENT_KEY_DELETE")          printf 'KEY_DELETE' ;;
         "$EVENT_MOUSE_CLICK")         printf 'MOUSE_CLICK' ;;
         "$EVENT_MOUSE_DOUBLE")        printf 'MOUSE_DOUBLE' ;;
         "$EVENT_MOUSE_SCROLL_UP")     printf 'MOUSE_SCROLL_UP' ;;
