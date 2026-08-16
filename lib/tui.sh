@@ -242,8 +242,18 @@ tui_lyric_parse() {
 
 # 返回当前歌词行索引 (播放位置 -> 最大 time <= pos 的行), 无则 -1
 tui_lyric_index() {
-    local pos="${1:-${PLAYBACK_POSITION:-0}}" i idx=-1
-    for ((i = 0; i < ${#TUI_LRC_TIMES[@]}; i++)); do
+    local pos="${1:-${PLAYBACK_POSITION:-0}}" i idx=-1 n
+    n=${#TUI_LRC_TIMES[@]}
+    if (( n == 0 )); then
+        printf '%d' "$idx"
+        return
+    fi
+    # 播放位置在第一句之前时, 显示第一句而不是无歌词
+    if (( pos < ${TUI_LRC_TIMES[0]} )); then
+        printf '0'
+        return
+    fi
+    for ((i = 0; i < n; i++)); do
         [[ "${TUI_LRC_TIMES[i]}" -le "$pos" ]] && idx=$i || break
     done
     printf '%d' "$idx"
@@ -667,7 +677,9 @@ tui_render_progress() {
     printf '%s' "${T_RESET}"
 
     # 右侧: 总时长 + 百分比
-    printf ' %s%02d:%02d%s %s%3d%%%s'         "${T_FG_WHITE}" $((total / 60)) $((total % 60)) "${T_RESET}"         "${BOLD:-${_T_ESC}[1m}${T_FG_CYAN}" "$pct" "${T_RESET}"
+    printf ' %s%02d:%02d%s %s%3d%%%s' \
+        "${T_FG_WHITE}" $((total / 60)) $((total % 60)) "${T_RESET}" \
+        "${T_BOLD}${T_FG_CYAN}" "$pct" "${T_RESET}"
 }
 #==============================================================================
 # 渲染: 封面 (kitty 图形协议, best-effort)
