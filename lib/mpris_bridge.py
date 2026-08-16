@@ -143,6 +143,23 @@ def main():
         def __init__(self):
             super().__init__(bus, OBJECT_PATH)
 
+        # MPRIS 必需: PropertiesChanged signal.
+        # 桌面任务栏/GNOME/KDE 依赖该 signal 实时反映播放状态变化.
+        # signature: 接口名, 变更属性 dict {name: value}, 失效属性 list.
+        @dbus.service.signal(PROP_IFACE, signature="sa{sv}as")
+        def PropertiesChanged(self, iface, changed, invalidated):
+            pass
+
+        def emit_props_changed(self, changed_dict):
+            """发出 PropertiesChanged signal (包装 dbus 类型转换)."""
+            if not changed_dict:
+                return
+            try:
+                invalidated = dbus.Array([], signature="s")
+                self.PropertiesChanged(PLAYER_IFACE, dbus.Dictionary(changed_dict, signature="sv"), invalidated)
+            except Exception:
+                pass
+
         @dbus.service.method(PROP_IFACE, in_signature="ss", out_signature="v")
         def Get(self, iface, prop):
             return self._get(iface, prop)
@@ -157,26 +174,41 @@ def main():
                 state["volume"] = max(0.0, min(1.0, v))
                 vol = int(round(v * 100))
                 mpv_cmd(sock_path, ["set_property", "volume", vol])
+                # 立即发出 PropertiesChanged 让任务栏同步显示
+                self.emit_props_changed({"Volume": dbus.Double(state["volume"])})
             elif iface == PLAYER_IFACE and prop == "LoopStatus":
                 try:
                     loop = str(value)
                 except Exception:
                     return
                 if loop == "Track":
+                    state["loop_status"] = "Track"; state["shuffle"] = False
                     append_cmd("mode:single")
                 elif loop == "Playlist":
+                    state["loop_status"] = "Playlist"; state["shuffle"] = False
                     append_cmd("mode:loop")
                 else:
+                    state["loop_status"] = "None"; state["shuffle"] = False
                     append_cmd("mode:list")
+                self.emit_props_changed({
+                    "LoopStatus": dbus.String(state["loop_status"]),
+                    "Shuffle": dbus.Boolean(state["shuffle"]),
+                })
             elif iface == PLAYER_IFACE and prop == "Shuffle":
                 try:
                     shuf = bool(value)
                 except Exception:
                     return
                 if shuf:
+                    state["loop_status"] = "Playlist"; state["shuffle"] = True
                     append_cmd("mode:random")
                 else:
+                    state["loop_status"] = "None"; state["shuffle"] = False
                     append_cmd("mode:list")
+                self.emit_props_changed({
+                    "Shuffle": dbus.Boolean(state["shuffle"]),
+                    "LoopStatus": dbus.String(state["loop_status"]),
+                })
 
         @dbus.service.method(PROP_IFACE, in_signature="s", out_signature="a{sv}")
         def GetAll(self, iface):
@@ -298,7 +330,21 @@ def main():
             mpv_cmd(sock_path, ["loadfile", uri])
 
     def poll():
+        """定时轮询 mpv 状态, 检测变化并发出 PropertiesChanged signal.
+        桌面任务栏需要这个 signal 才能实时同步.
+        """
         read_state_file()
+        # 记录轮询前的 state, 对比变化
+        prev = {
+            "title": state.get("title"),
+            "artist": state.get("artist"),
+            "album": state.get("album"),
+            "duration_us": state.get("duration_us"),
+            "paused": state.get("paused"),
+            "volume": state.get("volume"),
+            "loop_status": state.get("loop_status"),
+            "shuffle": state.get("shuffle"),
+        }
         try:
             title = mpv_get(sock_path, "media-title")
             if title:
@@ -317,7 +363,43 @@ def main():
                 state["volume"] = max(0.0, min(1.0, float(vol) / 100.0))
         except Exception:
             pass
+        # 对比 state, 发送 PropertiesChanged signal
+        changed = {}
+        if state.get("title") != prev["title"]:
+            changed["Metadata"] = _build_metadata()
+        elif state.get("duration_us") != prev["duration_us"]:
+            # 标题未变但总时长变了 (歌曲内位置同步): 更新 mpris:length
+            changed["Metadata"] = _build_metadata()
+        if state.get("paused") != prev["paused"]:
+            status = "Paused" if state["paused"] else "Playing"
+            changed["PlaybackStatus"] = dbus.String(status)
+        if state.get("volume") != prev["volume"]:
+            changed["Volume"] = dbus.Double(state["volume"])
+        if state.get("loop_status") != prev["loop_status"]:
+            changed["LoopStatus"] = dbus.String(state["loop_status"])
+        if state.get("shuffle") != prev["shuffle"]:
+            changed["Shuffle"] = dbus.Boolean(state["shuffle"])
+        if changed:
+            try:
+                _player_ref.emit_props_changed(changed)
+            except Exception:
+                pass
         return True
+
+    def _build_metadata():
+        """构造 mpris Metadata dict (避免代码重复)."""
+        meta = {
+            "xesam:title": dbus.String(state["title"]),
+            "mpris:length": dbus.Int64(state["duration_us"]),
+            "mpris:trackid": dbus.ObjectPath("/org/mpris/MediaPlayer2/Track/1"),
+        }
+        if state.get("artist"):
+            meta["xesam:artist"] = dbus.Array([dbus.String(state["artist"])], signature="s")
+        if state.get("album"):
+            meta["xesam:album"] = dbus.String(state["album"])
+        if state.get("cover"):
+            meta["mpris:artUrl"] = dbus.String(state["cover"])
+        return dbus.Dictionary(meta, signature="sv")
 
     try:
         name = dbus.service.BusName(MPRIS_NAME, bus, allow_replacement=True, replace_existing=False)
@@ -325,6 +407,7 @@ def main():
         sys.exit(0)
 
     player = MprisPlayer()
+    _player_ref = player  # 让闭包 poll 能访问 emit_props_changed
     GLib.timeout_add(1000, poll)
     loop = GLib.MainLoop()
     loop.run()

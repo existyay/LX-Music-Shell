@@ -22,6 +22,73 @@
 
 ---
 
+## [3.15.0] - 2026-08-16
+
+### 变更 (Major - 启动方式统一)
+
+- **删除所有 CLI 启动方式**: `lx-music-shell` 不再接受任何参数.
+  - 删除 `--tui` / `--cli` flag
+  - 删除 `--search` / `--version` / `--test-sources` / `--update-sources` / `--import-source` / `--status` / `--help` / `--pause` / `--resume` / `--stop` / `--recommend` / `--source` / `--quality` / `--playlist` 等子命令
+  - 删除 CLI 交互模式 (`interactive_mode` / `command_mode` 函数)
+  - 保留辅助脚本: `install.sh` / `uninstall.sh` / `sources-update.sh` (系统级, 与日常使用无关)
+- **TUI 菜单扩展**: 主菜单新增 4 项以补全原 CLI 功能
+  - 切换音源 (action: source) - 打开音源选择子菜单
+  - 测试源连通 (action: test_sources) - 调用 test_all_sources
+  - 更新源 (action: update_sources) - 调用 fetch_source_api
+  - 导入源 (action: import_source) - 提示用户使用 TUI 内交互
+- **遗留参数友好提示**: 传入任何参数时打印警告 + 指引, 然后仍然启动 TUI (不会默默忽略)
+- **TTY 检查**: 非交互终端 (管道/重定向) 报错退出, 避免 silent fail
+
+### 修复 (Patch)
+
+- **搜索框 fzf 简洁风改造**:
+  - 移除圆角边框 `╭ ╮`, 改用 fzf 风格的 `▏` 浅竖线入场符
+  - 焦点态入场符变青色加粗, 与未聚焦态形成视觉差异
+  - 标签 `搜索:` 跟随焦点状态变色
+  - 块光标 `▏` 用 cyan 背景突出插入点位置
+  - 右侧右对齐显示当前模式 (单曲模式 / 歌单模式)
+  - 聚焦 + 有输入时显示 `[Ctrl+U 清空]` 提示
+  - 长输入时光标位置优先保留 (左侧可截断)
+- **歌单选择页布局对齐 bug 修复**:
+  - `tui_render_playlist_select` 缺少 `main_h` 局部变量定义, 导致 `box_h` 始终为默认值 6
+  - 修复后 cover 高度自适应 (6/8/10 行), 与播放页一致
+- **退出时 `set -u` 崩溃**: `stop_status_bar` 访问未绑定的 `STATUS_BAR_PID` 触发 `set -u` 错误
+  - 在全局初始化添加 `STATUS_BAR_PID=""`
+  - 函数内用 `${STATUS_BAR_PID:-}` 防御式读取
+- **TUI 测试更新**: 菜单项数量从 9 调整为 13, 配套测试断言同步更新
+
+---
+
+## [3.14.1] - 2026-08-16
+
+### 修复 (Patch)
+
+- **封面错位修复**: cover_render.py 行间分隔符从裸 LF 改为 CRLF。
+  现代终端 (kitty/alacritty/wezterm) 默认 ONLCR 关闭, 裸 LF 不会回到行首,
+  导致第二行内容从上一行的列位置继续绘制, 造成严重错位.
+  现在所有换行使用 `\r\n`, 所有终端都能正确显示.
+- **封面防渗漏**: 每行末尾添加 `\033[K` (清行尾), 防止 BG 颜色从最后一格渗到行末.
+- **封面质量提升**: ffmpeg scale 算法从默认 bilinear 升级到 lanczos;
+  添加 `force_original_aspect_ratio=decrease` + `pad` 处理非正方形封面,
+  避免拉伸变形. PNG 原始比例 (常见 1:1) 现在保持原比例渲染.
+- **Kitty 原生图形协议优先**: tui_render_cover 调整优先级,
+  kitty 终端默认走原生 PNG 协议 (GPU 缩放, 比 halfblock 字符拼接更清晰).
+  halfblock 作为非 kitty 终端的 fallback. PNG 协议添加 `q=2` (quiet) 参数.
+- **歌单预览封面尺寸自适应**: 歌单选择页右侧预览框高度从固定 6 行改为
+  根据终端大小自适应 (6/8/10 行), 分辨率提升 67%~167%.
+  预览框高度在有封面/无封面两条路径上保持一致, 避免视觉跳跃.
+- **任务栏控制修复**: mpris_bridge.py 添加 `PropertiesChanged` signal.
+  之前只更新内部 state 不发 signal, 桌面任务栏无法实时同步状态变化.
+  现在 Set Volume/LoopStatus/Shuffle 后立即发 signal, poll 检测到状态变化也发.
+  同步维护 state 与 signal 一致性 (例如 SetLoopStatus 同步更新 Shuffle).
+- **新增测试**:
+  - `tests/test_cover_render.py` - 验证 cover_render.py 输出格式
+    (▀ 数量、行数、\r\n、\033[K、trailing newline)
+  - `tests/test_mpris_properties_changed.py` - 验证 D-Bus 端到端:
+    bridge 注册、Properties.GetAll、命令消费、PropertiesChanged signal 发出
+
+---
+
 ## [3.14.0] - 2026-08-16
 
 ### 新增/修复 (Minor)

@@ -1,6 +1,6 @@
 # Maintainer: existyay <liujam826@gmail.com>
 pkgname=lx-music-shell
-pkgver=3.14.0
+pkgver=3.15.0
 pkgrel=1
 pkgdesc="Terminal music player with multi-source support and auto-reconnect"
 arch=("any")

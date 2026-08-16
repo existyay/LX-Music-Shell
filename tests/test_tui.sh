@@ -77,12 +77,20 @@ assert_contains "截断加省略号" "$out" "…"
 echo -e "${YELLOW}=== 测试 3: 菜单 ===${NC}"
 #==============================================================================
 
-assert_eq "菜单项数量=9" "9" "${#TUI_MENU_ITEMS[@]}"
+assert_eq "菜单项数量=13 (v3.15 含源/品质/测试/更新/导入)" "13" "${#TUI_MENU_ITEMS[@]}"
 assert_eq "首项 action" "search" "$(printf '%s' "${TUI_MENU_ITEMS[0]#*|}")"
-assert_eq "末项 action" "quit" "$(printf '%s' "${TUI_MENU_ITEMS[8]#*|}")"
+assert_eq "末项 action" "quit" "$(printf '%s' "${TUI_MENU_ITEMS[12]#*|}")"
 
 UI_SELECTED=5
-assert_eq "选中项 action" "quality" "$(tui_menu_selected_action)"
+assert_eq "选中项 action" "source" "$(tui_menu_selected_action)"
+
+# 额外检查: 新增的菜单项都存在
+assert_eq "第7项 action" "quality" "$(printf '%s' "${TUI_MENU_ITEMS[6]#*|}")"
+assert_eq "第8项 action" "mode" "$(printf '%s' "${TUI_MENU_ITEMS[7]#*|}")"
+assert_eq "第9项 action" "test_sources" "$(printf '%s' "${TUI_MENU_ITEMS[8]#*|}")"
+assert_eq "第10项 action" "update_sources" "$(printf '%s' "${TUI_MENU_ITEMS[9]#*|}")"
+assert_eq "第11项 action" "import_source" "$(printf '%s' "${TUI_MENU_ITEMS[10]#*|}")"
+assert_eq "第12项 action" "help" "$(printf '%s' "${TUI_MENU_ITEMS[11]#*|}")"
 
 #==============================================================================
 echo -e "${YELLOW}=== 测试 4: 模式名 / 状态图标 ===${NC}"
@@ -134,7 +142,7 @@ UI_SCREEN=menu; UI_SELECTED=1
 tui_op_move_up; assert_eq "menu move_up 1->0" "0" "$UI_SELECTED"
 tui_op_move_up; assert_eq "menu move_up clamp 0" "0" "$UI_SELECTED"
 tui_op_move_down; assert_eq "menu move_down 0->1" "1" "$UI_SELECTED"
-tui_op_move_bottom; assert_eq "menu move_bottom ->8" "8" "$UI_SELECTED"
+tui_op_move_bottom; assert_eq "menu move_bottom ->12" "12" "$UI_SELECTED"
 
 UI_SCREEN=search
 PLAYLIST=("a|1|2|3|4|5|6|7|8" "b|1|2|3|4|5|6|7|8" "c|1|2|3|4|5|6|7|8")
@@ -229,7 +237,8 @@ render_search() {
 out=$(render_search)
 clean=$(strip_ansi "$out")
 assert_contains "搜索渲染含搜索框" "$clean" "搜索"
-assert_contains "搜索渲染含现代输入框" "$clean" "╭"
+assert_contains "搜索渲染含 fzf 风格入场符" "$clean" "▏"
+assert_contains "搜索渲染含标签" "$clean" "搜索:"
 assert_contains "搜索渲染含播放栏" "$clean" "🔊80%"
 assert_contains "搜索渲染含当前时间" "$clean" "01:35"
 assert_contains "搜索渲染含总时长" "$clean" "03:42"

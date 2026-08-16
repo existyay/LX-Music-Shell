@@ -15,7 +15,7 @@
 #==============================================================================
 
 # 版本信息
-VERSION="3.14.0"
+VERSION="3.15.0"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
@@ -113,6 +113,7 @@ MAX_RECONNECT_ATTEMPTS=5
 RECONNECT_DELAY=2               # 秒
 WATCHDOG_PID=""
 FETCH_PIDS=()
+STATUS_BAR_PID=""
 
 # 缓冲/播放进度
 # shellcheck disable=SC2034  # 播放状态供 player.sh / tui.sh 读取
@@ -1162,7 +1163,7 @@ start_status_bar() {
 
 # 停止状态栏
 stop_status_bar() {
-    if [[ -n "$STATUS_BAR_PID" ]]; then
+    if [[ -n "${STATUS_BAR_PID:-}" ]]; then
         kill "$STATUS_BAR_PID" 2>/dev/null || true
         STATUS_BAR_PID=""
         printf "\n"
@@ -2045,215 +2046,21 @@ show_welcome() {
 }
 
 #==============================================================================
-# 交互模式
+# v3.15: CLI 交互模式已移除. 统一使用 TUI 入口.
+# 保留函数 stub 以防遗留脚本或内部调用报错.
 #==============================================================================
 interactive_mode() {
-    # 简洁欢迎 (无动画闪屏)
-    show_welcome
-    
-    while true; do
-        printf '%b' "\033[32mlx>\033[0m "
-        local line
-        if ! IFS= read -r line; then
-            # EOF (Ctrl+D) - 退出交互模式
-            echo ""
-            break
-        fi
-
-        if [[ -z "$line" ]]; then
-            continue
-        fi
-
-        local cmd="${line%%[[:space:]]*}"
-        local rest="${line#*"$cmd"}"
-        rest="${rest# }"
-
-        # 将 rest 拆分为参数数组,供需要多参数的命令使用
-        local -a rest_args
-        if [[ -n "$rest" ]]; then
-            # shellcheck disable=SC2206  # 简单单词分割,不需要引号保留
-            rest_args=($rest)
-        fi
-        
-        # 解析并执行命令
-        case "$cmd" in
-            /help|/h)
-                show_help
-                ;;
-            /search|/s)
-                do_search "${rest_args[@]:-}"
-                show_playlist
-                ;;
-            /play|/p)
-                do_play "${rest_args[@]:-}"
-                ;;
-            /pause)
-                do_pause
-                ;;
-            /resume|/r)
-                do_resume
-                ;;
-            /stop)
-                do_stop
-                ;;
-            /next|/n)
-                do_next
-                ;;
-            /prev)
-                do_prev
-                ;;
-            /list|/l)
-                show_playlist
-                ;;
-            /clear)
-                clear_playlist
-                ;;
-            /mode)
-                set_play_mode "${rest_args[@]:-}"
-                ;;
-            /quality)
-                set_quality "${rest_args[@]:-}"
-                ;;
-            /playlist)
-                do_search_playlists "${rest_args[@]:-}"
-                ;;
-            /load-playlist)
-                do_load_playlist_tracks "${rest_args[@]:-}"
-                show_playlist
-                ;;
-            /recommend)
-                do_recommend_songs
-                show_playlist
-                ;;
-            /volume|/v)
-                set_volume "${rest_args[@]:-}"
-                ;;
-            /source|/src)
-                set_source "${rest_args[@]:-}"
-                ;;
-            /test-sources)
-                test_all_sources
-                ;;
-            /update-sources)
-                fetch_source_api
-                ;;
-            /import-source)
-                import_source "${rest_args[@]:-}"
-                ;;
-            /status)
-                show_status
-                ;;
-            /panel)
-                show_panel
-                ;;
-            /statusbar)
-                if [[ -n "$STATUS_BAR_PID" ]] && kill -0 "$STATUS_BAR_PID" 2>/dev/null; then
-                    stop_status_bar
-                else
-                    start_status_bar
-                    echo -e "\033[36m实时状态栏已启动 (再次 /statusbar 关闭, /stop 停止播放并关闭)\033[0m"
-                fi
-                ;;
-            /network)
-                echo "检查网络状态..."
-                if check_connectivity; then
-                    echo -e "\033[32m✓ 网络已连接\033[0m"
-                    NETWORK_STATUS="connected"
-                else
-                    echo -e "\033[31m✗ 网络已断开\033[0m"
-                    NETWORK_STATUS="disconnected"
-                fi
-                ;;
-            /reconnect)
-                echo "手动尝试重连..."
-                handle_network_loss
-                ;;
-            /config)
-                echo "当前配置:"
-                echo "  播放器: $PLAYER_BACKEND"
-                echo "  默认源: $DEFAULT_SOURCE"
-                echo "  搜索限制: $SEARCH_LIMIT"
-                echo "  播放模式: $PLAY_MODE"
-                echo "  音量: $VOLUME%"
-                ;;
-            /quit|/q|exit)
-                if [[ "${BACKGROUND_PLAY:-true}" == "true" ]]; then
-                    save_player_background_state
-                    stop_watchdog
-                    stop_status_bar
-                else
-                    do_stop
-                fi
-                LXMS_PLAYER_HANDLED=1
-                echo "再见！"
-                break
-                ;;
-            *)
-                # 非命令视为搜索
-                do_search "$line"
-                ;;
-        esac
-    done
+    echo "错误: CLI 交互模式已废弃 (v3.15+). 请直接运行 lx-music-shell 进入 TUI." >&2
+    exit 1
 }
 
 #==============================================================================
-# 命令行模式
+# v3.15: 命令行模式已移除. 统一使用 TUI 入口. 保留函数声明以避免遗留脚本调用报错.
 #==============================================================================
 command_mode() {
-    local cmd="$1"
-    shift
-    
-    case "$cmd" in
-        search|-s|--search)
-            do_search "$@"
-            show_playlist
-            ;;
-        test-sources|--test-sources)
-            test_all_sources
-            ;;
-        source|--source)
-            set_source "$@"
-            ;;
-        quality|--quality)
-            set_quality "$@"
-            ;;
-        playlist|--playlist)
-            do_search_playlists "$@"
-            ;;
-        recommend|--recommend)
-            do_recommend_songs
-            show_playlist
-            ;;
-        stop|--stop)
-            do_stop
-            ;;
-        pause|--pause)
-            do_pause
-            ;;
-        resume|--resume)
-            do_resume
-            ;;
-        status|--status)
-            show_status
-            ;;
-        update-sources|--update-sources)
-            fetch_source_api
-            ;;
-        import-source|--import-source)
-            import_source "$1"
-            ;;
-        help|-h|--help)
-            show_help
-            ;;
-        version|-v|--version)
-            echo "LX-Music-Shell v$VERSION"
-            ;;
-        *)
-            echo "未知命令: $cmd"
-            echo "使用 --help 查看帮助"
-            exit 1
-            ;;
-    esac
+    echo "错误: CLI 子命令已废弃 (v3.15+). 请直接运行 lx-music-shell 进入 TUI." >&2
+    echo "所有功能 (搜索/源管理/品质控制等) 均可通过 TUI 菜单访问." >&2
+    exit 1
 }
 
 #==============================================================================
@@ -2453,8 +2260,21 @@ tui_op_select() {
             ;;
         playlist) UI_SCREEN="search"; UI_FOCUS="list"; UI_QUERY=""; UI_SELECTED=0; UI_SCROLL_TOP=0 ;;
         playing)  UI_SCREEN="playing"; UI_FOCUS="list" ;;
+        source)   tui_op_open_source_select ;;
         quality)  tui_op_open_quality_select ;;
         mode)     tui_cycle_mode; save_config ;;
+        test_sources)
+            UI_SCREEN="search"; UI_FOCUS="list"; UI_QUERY=""; UI_SELECTED=0; UI_SCROLL_TOP=0
+            test_all_sources
+            ;;
+        update_sources)
+            UI_SCREEN="search"; UI_FOCUS="list"; UI_QUERY=""; UI_SELECTED=0; UI_SCROLL_TOP=0
+            fetch_source_api
+            ;;
+        import_source)
+            UI_SCREEN="search"; UI_FOCUS="list"; UI_QUERY=""; UI_SELECTED=0; UI_SCROLL_TOP=0
+            echo -e "${T_DIM}${T_FG_CYAN}提示: 在 TUI 中按 s 键切换音源, 或在 TUI 主菜单选 '切换音源'.${T_RESET}"
+            ;;
         help)     UI_SCREEN="help" ;;
         quit)     UI_QUIT=1 ;;
     esac
@@ -2506,18 +2326,21 @@ tui_handle_click() {
 }
 
 interactive_mode_tui() {
-    local force_tui="${1:-0}"
-
+    # v3.15: 统一入口. TUI 是唯一 UI 模式.
+    # 检测终端能力, 不支持时给出清晰错误提示并退出.
     if [[ "${LXMS_UI_CAPABILITY_AVAILABLE:-0}" != "1" ]]; then
-        interactive_mode
-        return
+        echo "错误: TUI 模块未加载." >&2
+        echo "请检查 lib/ 目录是否完整, 或重新安装 lx-music-shell." >&2
+        exit 1
     fi
 
     capability_apply_config "$CONFIG_FILE"
     detect_capability
-    if [[ "$force_tui" != "1" && "${LXMS_FORCE_TUI:-0}" != "1" ]]; then
-        interactive_mode
-        return
+    # 检查终端是否足够 (列数 >= 60, 行数 >= 20)
+    if (( ${LXMS_TERM_COLS:-0} < 60 || ${LXMS_TERM_LINES:-0} < 20 )); then
+        echo "错误: 终端太小 (${LXMS_TERM_COLS:-?}x${LXMS_TERM_LINES:-?}), 需要至少 60x20." >&2
+        echo "请调整终端窗口大小后重试." >&2
+        exit 1
     fi
 
     LXMS_TUI_ACTIVE=1
@@ -2726,64 +2549,29 @@ main() {
         fi
     fi
 
-    # 解析命令行参数
-    # use_tui=auto -> -1 (根据能力决定)
-    # use_tui=force-on -> 1 (--tui 很明确)
-    # use_tui=force-off -> 0 (--cli 很明确)
-    local use_tui=-1
-    local args=()
-
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --tui)
-                use_tui=1
-                shift
-                ;;
-            --cli)
-                use_tui=0
-                shift
-                ;;
-            --tui-status)
-                # 调试: 显示终端能力检测结果
-                load_modules
-                capability_apply_config "$CONFIG_FILE"
-                detect_capability
-                capability_print_status
-                exit 0
-                ;;
-            *)
-                args+=("$1")
-                shift
-                ;;
-        esac
-    done
-
-    if [[ $use_tui -eq 1 ]]; then
-        # 显式 --tui: 强制 TUI, 窗口较小时也保持 TUI 自适应布局
-        interactive_mode_tui 1
-    elif [[ $use_tui -eq 0 ]]; then
-        # 显式 --cli
-        if [[ ${#args[@]} -eq 0 ]]; then
-            interactive_mode
-        else
-            command_mode "${args[@]}"
-        fi
-    elif [[ ${#args[@]} -eq 0 ]]; then
-        # 无参数 - 自动判断模式
-        if [[ "${LXMS_UI_TUI_AVAILABLE:-0}" == "1" ]]; then
-            capability_apply_config "$CONFIG_FILE"
-            detect_capability
-            if [[ "${LXMS_FORCE_TUI:-0}" == "1" ]]; then
-                interactive_mode_tui
-            else
-                interactive_mode
-            fi
-        else
-            interactive_mode
-        fi
-    else
-        command_mode "${args[@]}"
+    # v3.15: 统一入口. 始终进入 TUI, 终端能力不够时给出清晰错误提示并退出.
+    # 检查是否传入了已废弃的 CLI 参数 (例如 --search kw, --version 等), 有则提醒后启动 TUI
+    if [[ $# -gt 0 ]]; then
+        echo -e "\033[33m警告: v3.15 起不再支持 CLI 参数 (--search/--version/--tui 等).\033[0m" >&2
+        echo -e "\033[33m      直接运行 \033[1mlx-music-shell\033[0;33m 启动 TUI, 所有功能通过菜单访问.\033[0m" >&2
+        echo "" >&2
     fi
+
+    # 如果不是交互终端 (例如管道/重定向), 报错退出 (v3.15 不再支持 CLI 模式)
+    if [[ ! -t 1 ]]; then
+        echo "错误: LX-Music-Shell v3.15+ 需要交互终端运行 TUI." >&2
+        echo "请在真终端中运行 lx-music-shell." >&2
+        exit 1
+    fi
+
+    # 检测终端能力
+    if [[ "${LXMS_UI_TUI_AVAILABLE:-0}" == "1" ]]; then
+        capability_apply_config "$CONFIG_FILE"
+        detect_capability
+    fi
+
+    # 进入 TUI (interactive_mode_tui 内部会检查 LXMS_FORCE_TUI 等配置)
+    interactive_mode_tui
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

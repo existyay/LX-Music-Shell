@@ -110,6 +110,24 @@ run_optional_shellcheck() {
   fi
 }
 
+# 封面渲染测试: 验证 cover_render.py 使用 \r\n 而非裸 LF (修复 kitty/alacritty/wezterm 错位)
+run_cover_render() {
+  python3 "$TEST_DIR/test_cover_render.py"
+}
+
+# MPRIS PropertiesChanged signal 测试: 验证任务栏能收到状态变化信号
+run_mpris_properties_changed() {
+  # 清理可能残留的 bridge 实例. 用精确模式避免在多进程环境(如许多 chromium)中
+  # pkill 扫描过慢导致测试卡住.
+  if command -v pgrep >/dev/null 2>&1; then
+    for pid in $(pgrep -f "mpris_bridge\.py" 2>/dev/null); do
+      kill -9 "$pid" 2>/dev/null || true
+    done
+  fi
+  sleep 0.5
+  python3 "$TEST_DIR/test_mpris_properties_changed.py"
+}
+
 run_test "bash syntax" run_bash_syntax
 run_test "load config" run_load_config
 run_test "fetch source api" run_fetch_source_api
@@ -117,6 +135,8 @@ run_test "set custom source" run_set_source
 run_test "mock search" run_do_search_mock
 run_test "show panel" run_show_panel
 run_test "run command mode" run_commands
+run_test "cover render format" run_cover_render
+run_test "mpris properties changed signal" run_mpris_properties_changed
 run_optional_shellcheck
 
 echo "All tests passed."

@@ -76,8 +76,12 @@ TUI_MENU_ITEMS=(
     "今日推荐|recommend"
     "播放列表|playlist"
     "正在播放|playing"
+    "切换音源|source"
     "切换音质|quality"
     "播放模式|mode"
+    "测试源连通|test_sources"
+    "更新源|update_sources"
+    "导入源|import_source"
     "帮助|help"
     "退出|quit"
 )
@@ -341,60 +345,110 @@ tui_render_menu() {
 }
 
 #==============================================================================
-# 渲染: 搜索框 (search 屏幕第 1 行主区)
+# 渲染: 搜索框 (search 屏幕第 1 行主区, fzf 简洁风格)
+#
+# 样式:
+#   非聚焦:  ▌  搜索: 输入关键词回车搜索          [单曲/歌单]
+#   聚焦:    ▌  搜索: |稻香_                     [单曲/歌单]
+#
+#   - 左侧 ▌ 作为入场提示 (焦点态变青色加粗)
+#   - 块光标 ▏ 在插入点
+#   - 右侧对齐显示当前模式 (单曲/歌单)
 #==============================================================================
 tui_render_search_input() {
     local row="$1" cols
     cols=$(tui_cols)
     tui_blank_row "$row"
-    tui_goto "$row" 2
 
     local focused=0
     [[ "${UI_FOCUS:-list}" == "search" ]] && focused=1
 
-    local cap_l="╭" cap_r="╮"
-    local field_w=$((cols - 4 - 2))
-    (( field_w < 8 )) && field_w=8
+    # 左侧提示符颜色 (聚焦/非聚焦区分)
+    local bar_color="${T_DIM}${T_FG_GRAY}"
+    local label_color="${T_DIM}${T_FG_GRAY}"
+    if ((focused)); then
+        bar_color="${T_BOLD}${T_FG_CYAN}"
+        label_color="${T_BOLD}${T_FG_CYAN}"
+    fi
 
-    local content
+    # 右侧模式提示
+    local mode_hint
+    if [[ "${UI_SEARCH_MODE:-song}" == "playlist" ]]; then
+        mode_hint="${T_DIM}${T_FG_PINK}歌单模式${T_RESET}"
+    else
+        mode_hint="${T_DIM}${T_FG_GRAY}单曲模式${T_RESET}"
+    fi
+
+    # 右侧清空提示 (聚焦 + 有输入时才显示)
+    local clear_hint=""
+    if ((focused)) && [[ -n "${UI_QUERY:-}" ]]; then
+        clear_hint="  ${T_DIM}${T_FG_GRAY}[Ctrl+U 清空]${T_RESET}"
+    fi
+
+    local right_w=$(tui_width "$mode_hint")+$(tui_width "$clear_hint")-2
+    local field_w=$((cols - 4 - right_w - 2))  # 2 左 + 前缀宽度 + 右侧 + 1 余量
+    (( field_w < 10 )) && field_w=10
+
+    # 起点
+    tui_goto "$row" 2
+
+    # 左侧 ▌ 竖线提示符
+    printf '%s▏%s' "$bar_color" "${T_RESET}"
+
+    # 标签 "搜索:"
+    printf '%s搜索:%s' "$label_color" "${T_RESET}"
+
+    # 输入内容
     if ((focused)); then
         local q cur before after
         q="${UI_QUERY:-}"
         cur="${UI_QUERY_CURSOR:-0}"
         (( cur < 0 )) && cur=0
         (( cur > ${#q} )) && cur=${#q}
-        before="$(tui_trunc "${q:0:cur}" $((field_w / 2 - 3)))"
-        after="$(tui_trunc "${q:cur}" $((field_w / 2 - 3)))"
-        content=" ${before}▏${after}"
-        content="$(tui_trunc "$content" $((field_w - 2)))"
+        before="${q:0:cur}"
+        after="${q:cur}"
+
+        # 预留块光标占 1 字符
+        local max_w=$((field_w - 2))
+        # 右侧优先保留, 左侧可截断 (保光标可见)
+        if (( ${#before} + ${#after} + 1 > max_w )); then
+            # 光标后部分优先保留 (用户最关心的输入)
+            local keep_after=$((max_w / 2))
+            (( keep_after < 4 )) && keep_after=4
+            local keep_before=$((max_w - keep_after - 1))
+            (( keep_before < 4 )) && keep_before=4
+            if (( ${#after} > keep_after )); then
+                after="${after:0:$keep_after}"
+            fi
+            if (( ${#before} > keep_before )); then
+                before="${before: -keep_before}"
+            fi
+        fi
+
+        if [[ -z "$before" && -z "$after" ]]; then
+            # 空输入: 显示柔和占位符 + 块光标
+            printf '%s%s%s%s' "${T_DIM}${T_FG_GRAY}" "▏" "${T_RESET}" " "
+        else
+            printf '%s%s%s%s%s%s%s' \
+                "${T_FG_WHITE}" "$before" "${T_RESET}" \
+                "${T_BG_CYAN}${T_BOLD}${T_FG_BLACK}" "▏" "${T_RESET}" \
+                "${T_FG_WHITE}" "$after"
+        fi
     else
         if [[ -z "${UI_QUERY:-}" ]]; then
             if [[ "${UI_SEARCH_MODE:-song}" == "playlist" ]]; then
-                content=" 输入歌单关键词后回车搜索"
+                printf '%s%s%s' "${T_DIM}${T_FG_GRAY}" "输入歌单关键词回车搜索" "${T_RESET}"
             else
-                content=" 输入关键词后回车搜索"
+                printf '%s%s%s' "${T_DIM}${T_FG_GRAY}" "输入关键词回车搜索" "${T_RESET}"
             fi
         else
-            content=" ${UI_QUERY}"
+            printf '%s%s%s' "${T_FG_WHITE}" "${UI_QUERY}" "${T_RESET}"
         fi
-        content="$(tui_trunc "$content" $((field_w - 2)))"
     fi
 
-    local content_w pad
-    content_w=$(tui_width "$content")
-    pad=$((field_w - content_w))
-    (( pad < 0 )) && pad=0
-
-    printf '%s%s%s' "${T_FG_CYAN}${T_BOLD}" "$cap_l" "${T_RESET}"
-    if ((focused)); then
-        printf '%s' "${T_BG_BLUE}${T_FG_WHITE}"
-    else
-        printf '%s' "${T_DIM}${T_FG_GRAY}"
-    fi
-    printf '%s' "$content"
-    printf '%*s' "$pad" ''
-    printf '%s' "${T_RESET}"
-    printf '%s%s%s' "${T_FG_CYAN}${T_BOLD}" "$cap_r" "${T_RESET}"
+    # 右侧模式提示
+    tui_goto "$row" $((cols - right_w - 1))
+    printf '%b%b' "$mode_hint" "$clear_hint"
 }
 
 # 音质 chip 文本 (纯文本, 无颜色, 用于宽度计算)
@@ -726,16 +780,18 @@ tui_render_cover() {
     (( height < 2 )) && height=2
     local width=$((height * 2))
     if [[ -n "${TUI_COVER_FILE:-}" ]] && [[ -f "$TUI_COVER_FILE" ]]; then
-        # 优先使用 ffmpeg 半块真彩渲染 (兼容所有真彩终端, 包括 Kitty)
+        # 优先级 1: Kitty 终端优先用原生图形协议 (PNG, 高质量, 渲染最准确)
+        # 原生 PNG 协议由 Kitty 内部 GPU 缩放, 比 halfblock 字符拼接更清晰.
+        # q=2 (quiet) 避免 Kitty 启动时显示传输进度提示; z=0 表示不压缩 (PNG 已压缩).
+        if [[ "${TERM:-}" == *kitty* || "${TERM:-}" == xterm-kitty* ]]; then
+            tui_goto "$row" "$col"
+            printf '\033_Ga=T,t=f,f=100,z=0,c=%d,r=%d,q=2;%s\033\\' "$width" "$height" "$TUI_COVER_FILE"
+            return 0
+        fi
+        # 优先级 2: ffmpeg 半块真彩渲染 (兼容所有真彩终端: iTerm/wezterm/alacritty 等)
         if [[ -n "${LXMS_COVER_RENDER:-}" ]] && [[ -f "${LXMS_COVER_RENDER:-}" ]] && command -v python3 >/dev/null 2>&1 && command -v ffmpeg >/dev/null 2>&1; then
             tui_goto "$row" "$col"
             python3 "$LXMS_COVER_RENDER" "$TUI_COVER_FILE" "$width" "$height" 2>/dev/null
-            return 0
-        fi
-        # Kitty 原生图形协议 (备选, 半块渲染不可用时)
-        if [[ "${TERM:-}" == *kitty* || "${TERM:-}" == xterm-kitty* ]]; then
-            tui_goto "$row" "$col"
-            printf '\033_Ga=T,f=100,t=f,c=%d,r=%d;%s\033\\' "$width" "$height" "$TUI_COVER_FILE"
             return 0
         fi
     fi
@@ -1114,6 +1170,9 @@ tui_render_playlist_select() {
     (( list_w < 20 )) && list_w=20
     (( list_w > cols - 30 )) && list_w=$((cols - 30))
 
+    # 主区高度, 用于右侧预览框/封面尺寸自适应
+    local main_h=$((end_row - start_row + 1))
+
     if ((n == 0)); then
         tui_goto "$start_row" 4
         printf '%s(无歌单结果)%s' "${T_DIM}${T_FG_GRAY}" "${T_RESET}"
@@ -1150,7 +1209,11 @@ tui_render_playlist_select() {
     local sline="${PLAYLIST_SEARCH_RESULTS[sel]}"
     local sname sid scount splay scover
     IFS='|' read -r sname sid scount splay scover <<< "$sline"
-    local box_h=7
+    # box_h 统一控制右侧预览框的高度, cover 分支和 ASCII fallback 都用它.
+    # 自适应: 终端行多就用更大的预览框 (提升封面分辨率).
+    local box_h=6
+    (( main_h >= 18 )) && box_h=10
+    (( main_h >= 14 && main_h < 18 )) && box_h=8
     local top="$start_row"
     local cover_file
     cover_file="$(playlist_cover_cache_path "$sid" 2>/dev/null)"
@@ -1159,9 +1222,14 @@ tui_render_playlist_select() {
     if [[ -n "$cover_file" ]] && [[ -f "$cover_file" ]]; then
         local _old_cover="${TUI_COVER_FILE:-}"
         TUI_COVER_FILE="$cover_file"
-        tui_render_cover "$top" "$pcol" 6
+        # cover 宽度限制: 右侧 pw 至少要能放下歌单信息
+        local cover_box_w=$((box_h * 2))
+        (( cover_box_w > pw - 2 )) && cover_box_w=$((pw - 2))
+        (( cover_box_w < 8 )) && cover_box_w=8
+        local cover_box_h_actual=$((cover_box_w / 2))
+        tui_render_cover "$top" "$pcol" "$cover_box_h_actual"
         TUI_COVER_FILE="$_old_cover"
-        info_row=$((top + 7))
+        info_row=$((top + box_h))
     else
         tui_goto "$top" "$pcol"
         printf '┌%s┐' "$(printf '─%.0s' $(seq 1 $((pw - 2))))"
@@ -1178,7 +1246,8 @@ tui_render_playlist_select() {
         tw=$(tui_width "$cover_text")
         (( tw > pw - 4 )) && cover_text="$(tui_trunc "$cover_text" $((pw - 4)))"
         local pad=$(( (pw - 2 - tw) / 2 ))
-        tui_goto $((top + 3)) $((pcol + 1))
+        local text_row=$((top + box_h / 2))
+        tui_goto "$text_row" $((pcol + 1))
         printf '%*s%s%*s' "$pad" '' "$cover_text" $((pw - 2 - tw - pad)) ''
 
         info_row=$((top + box_h))
