@@ -1021,8 +1021,15 @@ tui_render_playing() {
     (( main_h < 10 )) && cover_h=6
     local cover_w=$((cover_h * 2))
 
-    if [[ -n "${TUI_COVER_FILE:-}" ]] && [[ -f "$TUI_COVER_FILE" ]]; then
+    local cover_file="${CURRENT_PLAYLIST_COVER_FILE:-${TUI_COVER_FILE:-}}"
+    if [[ -n "$cover_file" && -f "${cover_file%.jpg}.png" ]]; then
+        cover_file="${cover_file%.jpg}.png"
+    fi
+    if [[ -n "$cover_file" ]] && [[ -f "$cover_file" ]]; then
+        local _old_cover="${TUI_COVER_FILE:-}"
+        TUI_COVER_FILE="$cover_file"
         tui_render_cover "$start_row" 2 "$cover_h"
+        TUI_COVER_FILE="$_old_cover"
     else
         local cw=22 ch=7 left=2 top="$start_row" r
         tui_goto "$top" "$left"
@@ -1141,29 +1148,41 @@ tui_render_playlist_select() {
     local pw=$((cols - pcol - 2))
     (( pw < 14 )) && pw=14
     local sline="${PLAYLIST_SEARCH_RESULTS[sel]}"
-    local sname scount splay scover
-    IFS='|' read -r sname _ scount splay scover <<< "$sline"
+    local sname sid scount splay scover
+    IFS='|' read -r sname sid scount splay scover <<< "$sline"
     local box_h=7
     local top="$start_row"
-    tui_goto "$top" "$pcol"
-    printf '┌%s┐' "$(printf '─%.0s' $(seq 1 $((pw - 2))))"
-    local b
-    for ((b = 1; b < box_h - 1; b++)); do
-        tui_goto $((top + b)) "$pcol"
-        printf '│%*s│' $((pw - 2)) ''
-    done
-    tui_goto $((top + box_h - 1)) "$pcol"
-    printf '└%s┘' "$(printf '─%.0s' $(seq 1 $((pw - 2))))"
+    local cover_file
+    cover_file="$(playlist_cover_cache_path "$sid" 2>/dev/null)"
+    [[ -f "${cover_file%.jpg}.png" ]] && cover_file="${cover_file%.jpg}.png"
+    local info_row
+    if [[ -n "$cover_file" ]] && [[ -f "$cover_file" ]]; then
+        local _old_cover="${TUI_COVER_FILE:-}"
+        TUI_COVER_FILE="$cover_file"
+        tui_render_cover "$top" "$pcol" 6
+        TUI_COVER_FILE="$_old_cover"
+        info_row=$((top + 7))
+    else
+        tui_goto "$top" "$pcol"
+        printf '┌%s┐' "$(printf '─%.0s' $(seq 1 $((pw - 2))))"
+        local b
+        for ((b = 1; b < box_h - 1; b++)); do
+            tui_goto $((top + b)) "$pcol"
+            printf '│%*s│' $((pw - 2)) ''
+        done
+        tui_goto $((top + box_h - 1)) "$pcol"
+        printf '└%s┘' "$(printf '─%.0s' $(seq 1 $((pw - 2))))"
 
-    local cover_text="♫ 歌单封面"
-    local tw
-    tw=$(tui_width "$cover_text")
-    (( tw > pw - 4 )) && cover_text="$(tui_trunc "$cover_text" $((pw - 4)))"
-    local pad=$(( (pw - 2 - tw) / 2 ))
-    tui_goto $((top + 3)) $((pcol + 1))
-    printf '%*s%s%*s' "$pad" '' "$cover_text" $((pw - 2 - tw - pad)) ''
+        local cover_text="♫ 歌单封面"
+        local tw
+        tw=$(tui_width "$cover_text")
+        (( tw > pw - 4 )) && cover_text="$(tui_trunc "$cover_text" $((pw - 4)))"
+        local pad=$(( (pw - 2 - tw) / 2 ))
+        tui_goto $((top + 3)) $((pcol + 1))
+        printf '%*s%s%*s' "$pad" '' "$cover_text" $((pw - 2 - tw - pad)) ''
 
-    local info_row=$((top + box_h))
+        info_row=$((top + box_h))
+    fi
     local iline
     iline="名称: ${sname}"
     iline="$(tui_trunc "$iline" "$pw")"

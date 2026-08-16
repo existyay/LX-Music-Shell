@@ -15,7 +15,7 @@
 #==============================================================================
 
 # 版本信息
-VERSION="3.13.5"
+VERSION="3.14.0"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
@@ -95,6 +95,9 @@ PLAYER_STATUS="stopped"
 CURRENT_TRACK=""
 CURRENT_SOURCE="$DEFAULT_SOURCE"
 CURRENT_SOURCE_NAME=""
+CURRENT_PLAYLIST_NAME=""
+CURRENT_PLAYLIST_COVER=""
+CURRENT_PLAYLIST_COVER_FILE=""
 PLAYLIST=()
 PLAYLIST_INDEX=0
 
@@ -825,6 +828,32 @@ fetch_lyrics_async() {
         mkdir -p "$(dirname "$out")"
         printf '%s' "$lrc" > "$out"
         touch "$out.ready"
+    fi
+}
+
+# 歌单封面缓存路径
+playlist_cover_cache_path() {
+    local pid="$1" hash
+    hash=$(printf 'playlist-%s' "$pid" | md5sum 2>/dev/null | cut -d' ' -f1)
+    [[ -z "$hash" ]] && hash=$(printf 'playlist-%s' "$pid" | cksum 2>/dev/null | cut -d' ' -f1)
+    printf '%s/%s.jpg' "${CACHE_DIR}/covers" "${hash:-playlist}"
+}
+
+# 后台下载歌单封面 (完成时 touch ready)
+fetch_playlist_cover_async() {
+    local pid="$1" cover="$2" out="$3"
+    [[ -z "$pid" || -z "$cover" || "$cover" != http* || -z "$out" ]] && return 0
+    mkdir -p "$(dirname "$out")"
+    if [[ ! -s "$out" ]]; then
+        curl -s --connect-timeout 6 --max-time 15 -o "$out" "$cover" 2>/dev/null || rm -f "$out"
+    fi
+    if [[ -s "$out" ]]; then
+        local png="${out%.jpg}.png"
+        if [[ ! -s "$png" ]] && command -v ffmpeg >/dev/null 2>&1; then
+            ffmpeg -v error -i "$out" -frames:v 1 "$png" >/dev/null 2>&1 || rm -f "$png"
+        fi
+        touch "$out.ready"
+        touch "${CACHE_DIR}/covers/.playlist-covers.ready"
     fi
 }
 
@@ -1619,6 +1648,17 @@ do_search_playlists() {
         printf '  %2d. %-24s | %s首 | 播放%s\n' "$i" "$name" "$count" "$play"
         ((i++))
     done
+
+    # 后台下载歌单封面, 完成后主循环自动重绘
+    local _pl _pid _pcover _pout
+    for _pl in "${PLAYLIST_SEARCH_RESULTS[@]}"; do
+        IFS='|' read -r _ _pid _ _ _pcover <<< "$_pl"
+        if [[ -n "$_pid" && "$_pcover" == http* ]]; then
+            _pout=$(playlist_cover_cache_path "$_pid")
+            fetch_playlist_cover_async "$_pid" "$_pcover" "$_pout" &
+            FETCH_PIDS+=("$!")
+        fi
+    done
     return 0
 }
 
@@ -1647,6 +1687,19 @@ do_load_playlist_tracks() {
     done <<< "$results"
     CURRENT_SOURCE="netease"
     CURRENT_SOURCE_NAME="网易云音乐"
+    # 记录歌单信息, 播放页优先展示歌单封面
+    for _line in "${PLAYLIST_SEARCH_RESULTS[@]}"; do
+        IFS='|' read -r _plname _plid _ _ _plcover <<< "$_line"
+        if [[ "$_plid" == "$playlist_id" ]]; then
+            # shellcheck disable=SC2034  # 供 lib/tui.sh 播放页/歌单页展示
+            CURRENT_PLAYLIST_NAME="$_plname"
+            # shellcheck disable=SC2034
+            CURRENT_PLAYLIST_COVER="$_plcover"
+            # shellcheck disable=SC2034
+            CURRENT_PLAYLIST_COVER_FILE="$(playlist_cover_cache_path "$_plid")"
+            break
+        fi
+    done
     echo -e "\033[32m✓ 已加载 ${n} 首歌曲到播放列表\033[0m"
     return 0
 }
@@ -2514,6 +2567,12 @@ interactive_mode_tui() {
             # shellcheck disable=SC2034  # 同上
             [[ -s "$cover_png" ]] && TUI_COVER_FILE="$cover_png"
             LXMS_PENDING_COVER=""
+            TUI_DIRTY=1
+        fi
+
+        # 歌单封面下载完成标记
+        if [[ -f "${CACHE_DIR}/covers/.playlist-covers.ready" ]]; then
+            rm -f "${CACHE_DIR}/covers/.playlist-covers.ready"
             TUI_DIRTY=1
         fi
 
