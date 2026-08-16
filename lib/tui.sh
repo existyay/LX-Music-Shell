@@ -352,38 +352,49 @@ tui_render_search_input() {
     local focused=0
     [[ "${UI_FOCUS:-list}" == "search" ]] && focused=1
 
-    printf '%s🔍 %s' "${T_FG_CYAN}${T_BOLD}" "${T_RESET}"
-    local prompt
+    local cap_l="╭" cap_r="╮"
+    local field_w=$((cols - 4 - 2))
+    (( field_w < 8 )) && field_w=8
+
+    local content
     if ((focused)); then
-        prompt="${T_BG_BLUE}${T_FG_WHITE}"
-        printf '%s' "${T_FG_CYAN}${T_BOLD}▸${T_RESET} "
         local q cur before after
         q="${UI_QUERY:-}"
         cur="${UI_QUERY_CURSOR:-0}"
         (( cur < 0 )) && cur=0
         (( cur > ${#q} )) && cur=${#q}
-        before="$(tui_trunc "${q:0:cur}" $((cols - 26)))"
-        after="$(tui_trunc "${q:cur}" $((cols - 26)))"
-        printf '%s%s%s%s%s' "$prompt" "$before" "${T_BG_BLUE}${T_FG_WHITE}▏${T_RESET}" "$after" "${T_RESET}"
-        printf '%s|%s' "${T_FG_CYAN}${T_BOLD}" "${T_RESET}"
+        before="$(tui_trunc "${q:0:cur}" $((field_w / 2 - 3)))"
+        after="$(tui_trunc "${q:cur}" $((field_w / 2 - 3)))"
+        content=" ${before}▏${after}"
+        content="$(tui_trunc "$content" $((field_w - 2)))"
     else
         if [[ -z "${UI_QUERY:-}" ]]; then
             if [[ "${UI_SEARCH_MODE:-song}" == "playlist" ]]; then
-                printf '%s(输入歌单关键词后回车搜索, / 聚焦)%s' "${T_DIM}${T_FG_GRAY}" "${T_RESET}"
+                content=" 输入歌单关键词后回车搜索"
             else
-                printf '%s(输入关键词后回车搜索, / 聚焦)%s' "${T_DIM}${T_FG_GRAY}" "${T_RESET}"
+                content=" 输入关键词后回车搜索"
             fi
         else
-            printf '%s%s%s' "${T_FG_WHITE}" "$(tui_trunc "${UI_QUERY}" $((cols - 24)))" "${T_RESET}"
+            content=" ${UI_QUERY}"
         fi
+        content="$(tui_trunc "$content" $((field_w - 2)))"
     fi
 
-    # 右侧: 源 + 音质 chip
-    local right right_w
-    right=" [$(tui_mode_name)] $(tui_quality_chip) "
-    right_w=$(tui_width "$right")
-    tui_goto "$row" $((cols - right_w + 1))
-    printf '%s' "$right"
+    local content_w pad
+    content_w=$(tui_width "$content")
+    pad=$((field_w - content_w))
+    (( pad < 0 )) && pad=0
+
+    printf '%s%s%s' "${T_FG_CYAN}${T_BOLD}" "$cap_l" "${T_RESET}"
+    if ((focused)); then
+        printf '%s' "${T_BG_BLUE}${T_FG_WHITE}"
+    else
+        printf '%s' "${T_DIM}${T_FG_GRAY}"
+    fi
+    printf '%s' "$content"
+    printf '%*s' "$pad" ''
+    printf '%s' "${T_RESET}"
+    printf '%s%s%s' "${T_FG_CYAN}${T_BOLD}" "$cap_r" "${T_RESET}"
 }
 
 # 音质 chip 文本 (纯文本, 无颜色, 用于宽度计算)

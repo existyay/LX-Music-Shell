@@ -229,7 +229,7 @@ render_search() {
 out=$(render_search)
 clean=$(strip_ansi "$out")
 assert_contains "搜索渲染含搜索框" "$clean" "搜索"
-assert_contains "搜索渲染含音质 chip" "$clean" "FLAC"
+assert_contains "搜索渲染含现代输入框" "$clean" "╭"
 assert_contains "搜索渲染含播放栏" "$clean" "🔊80%"
 assert_contains "搜索渲染含当前时间" "$clean" "01:35"
 assert_contains "搜索渲染含总时长" "$clean" "03:42"
