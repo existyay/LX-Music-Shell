@@ -118,6 +118,14 @@ LXMS_LRC_RAW="[ar:歌手]
 tui_lyric_parse
 assert_eq "元数据行跳过" "1" "${#TUI_LRC_TEXTS[@]}"
 
+# 播放位置早于第一句时显示第一句
+LXMS_LRC_RAW="[00:10.00]第一句
+[00:20.00]第二句"
+tui_lyric_parse
+assert_eq "早于第一句时索引为 0" "0" "$(tui_lyric_index 5)"
+assert_eq "15s 指向第一句" "0" "$(tui_lyric_index 15)"
+assert_eq "25s 指向第二句" "1" "$(tui_lyric_index 25)"
+
 #==============================================================================
 echo -e "${YELLOW}=== 测试 6: 操作函数 ===${NC}"
 #==============================================================================
@@ -227,6 +235,20 @@ out=$(render_quality_select)
 clean=$(strip_ansi "$out")
 assert_contains "音质选择渲染含标题" "$clean" "选择音质"
 assert_contains "音质选择渲染含 FLAC" "$clean" "FLAC (无损)"
+
+render_progress_line() {
+    UI_SCREEN="menu"
+    PLAYBACK_POSITION=75
+    PLAYBACK_DURATION=222
+    tui_render_progress 30 2>/dev/null
+}
+out=$(render_progress_line)
+assert_contains "进度条无字面量转义残留" "$out" "33%"
+if [[ "$out" == *'\033[1m'* ]]; then
+    assert_eq "进度条不含 \033[1m 字面量" "0" "1"
+else
+    assert_eq "进度条不含 \033[1m 字面量" "0" "0"
+fi
 
 render_playing() {
     UI_SCREEN="playing"

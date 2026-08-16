@@ -15,7 +15,7 @@
 #==============================================================================
 
 # 版本信息
-VERSION="3.8.1"
+VERSION="3.9.0"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
@@ -107,6 +107,7 @@ RECONNECT_ATTEMPTS=0
 MAX_RECONNECT_ATTEMPTS=5
 RECONNECT_DELAY=2               # 秒
 WATCHDOG_PID=""
+FETCH_PIDS=()
 
 # 缓冲/播放进度
 # shellcheck disable=SC2034  # 播放状态供 player.sh / tui.sh 读取
@@ -758,6 +759,16 @@ source_display_name() {
     esac
 }
 
+# 终端标题同步 (状态栏/任务栏显示当前播放)
+update_terminal_title() {
+    local track="${CURRENT_TRACK:-}"
+    if [[ -n "$track" ]]; then
+        printf '\033]0;%s - LX-Music-Shell\a' "$track"
+    else
+        printf '\033]0;LX-Music-Shell\a'
+    fi
+}
+
 # 源是否真实可用 (有注册搜索函数或已配置自定义搜索 URL)
 source_is_available() {
     local src
@@ -887,6 +898,7 @@ do_play() {
     fi
 
     CURRENT_TRACK="$name - $artist"
+    update_terminal_title
 
     # 用 mpv IPC 后端启动播放
     if ! player_start "$url" "$CURRENT_TRACK" "$artist" "$album" "$cover"; then
@@ -903,6 +915,11 @@ do_play() {
     fi
 
     # 后台拉取歌词 + 封面 (子 shell 写文件, 主循环检测 ready)
+    # 清理上一首可能未结束的拉取任务, 避免后台 curl 堆积
+    if [[ ${#FETCH_PIDS[@]} -gt 0 ]]; then
+        kill "${FETCH_PIDS[@]}" 2>/dev/null || true
+        FETCH_PIDS=()
+    fi
     # shellcheck disable=SC2034  # TUI_COVER_FILE/LXMS_LRC_RAW 供 lib/tui.sh 渲染
     TUI_COVER_FILE=""
     LXMS_LRC_RAW=""
@@ -913,10 +930,12 @@ do_play() {
     lyrics_file=$(lyrics_cache_path "$song_id" "$src")
     if [[ -n "$song_id" ]]; then
         fetch_lyrics_async "$song_id" "$src" "$lyrics_file" &
+        FETCH_PIDS+=("$!")
         LXMS_PENDING_LYRICS="$lyrics_file"
     fi
     if cover_file=$(cover_cache_path "$cover"); then
         fetch_cover_async "$cover" "$cover_file" &
+        FETCH_PIDS+=("$!")
         LXMS_PENDING_COVER="$cover_file"
     fi
 
@@ -948,6 +967,8 @@ do_stop() {
     stop_watchdog
     stop_status_bar
     rm -f "${CACHE_DIR}/player-state" 2>/dev/null || true
+    CURRENT_TRACK=""
+    update_terminal_title
     [[ "${LXMS_TUI_ACTIVE:-0}" != "1" ]] && echo -e "\033[31m⏹ 已停止\033[0m"
 }
 
@@ -1101,6 +1122,10 @@ stop_status_bar() {
 cleanup_player() {
     stop_watchdog
     stop_status_bar
+    if [[ ${#FETCH_PIDS[@]} -gt 0 ]]; then
+        kill "${FETCH_PIDS[@]}" 2>/dev/null || true
+        FETCH_PIDS=()
+    fi
     if declare -f player_cleanup >/dev/null 2>&1; then
         player_cleanup
     elif [[ -n "$PLAYER_PID" ]]; then
@@ -2425,7 +2450,8 @@ interactive_mode_tui() {
     UI_FOCUS="list"
     UI_SEARCH_MODE="song"
 
-    if supports_mouse; then input_enable_mouse; fi
+    # 现代终端普遍支持 SGR 1006; 统一启用, 不支持时终端会自行忽略
+    input_enable_mouse
     tui_splash_loading
     tui_enter
     # 终端 resize 时清屏一次 (tui.sh 内部处理), 避免旧尺寸残留
@@ -2543,7 +2569,7 @@ interactive_mode_tui() {
         esac
     done
 
-    if supports_mouse; then input_disable_mouse; fi
+    input_disable_mouse
     trap - WINCH 2>/dev/null || true
     if [[ "${BACKGROUND_PLAY:-true}" == "true" ]]; then
         save_player_background_state
