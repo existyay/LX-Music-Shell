@@ -34,7 +34,8 @@ ui_draw_footer() {
 
 # Simple spinner (non-blocking caller should sleep)
 ui_spinner_frame() {
-    local frames=("⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏")
+    # 使用 ASCII 帧, 避免部分终端/字体下 Braille 字符显示为乱码
+    local frames=("|" "/" "-" "\\")
     local i=${1:-0}
     printf '%b' "${frames[$((i % ${#frames[@]}))]}"
 }

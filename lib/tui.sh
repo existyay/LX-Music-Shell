@@ -151,6 +151,14 @@ tui_blank_row() {
     tui_clr_line
 }
 
+# 清空连续区域的所有行 (屏幕切换/列表缩短时避免残留旧内容造成“乱码”)
+tui_blank_area() {
+    local start="$1" end="$2" row
+    for ((row = start; row <= end; row++)); do
+        tui_blank_row "$row"
+    done
+}
+
 #==============================================================================
 # 播放模式名称 / 状态图标
 #==============================================================================
@@ -243,12 +251,24 @@ tui_render_topline() {
 #==============================================================================
 # 渲染: 副标题 (音源 + 版本)
 #==============================================================================
+tui_source_name() {
+    case "${CURRENT_SOURCE_NAME:-${CURRENT_SOURCE:-}}" in
+        ""|netease|wy) printf '网易云音乐' ;;
+        kugou|kg)      printf '酷狗音乐' ;;
+        kuwo|kw)       printf '酷我音乐' ;;
+        qq|tx)         printf 'QQ音乐' ;;
+        migu|mg)       printf '咪咕音乐' ;;
+        ximalaya)      printf '喜马拉雅' ;;
+        *)             printf '%s' "${CURRENT_SOURCE_NAME:-${CURRENT_SOURCE}}" ;;
+    esac
+}
+
 tui_render_subtitle() {
     local row="$1" cols left sub
     cols=$(tui_cols)
     tui_goto "$row" 1
     tui_clr_line
-    sub="♪ ${CURRENT_SOURCE_NAME:-${CURRENT_SOURCE:-netease}}   v${VERSION:-3.0}"
+    sub="♪ $(tui_source_name)   v${VERSION:-3.0}"
     left=$(tui_left_pad "$sub" "$cols")
     printf '%*s%s%s%s' "$left" '' "${T_DIM}${T_FG_GRAY}" "$sub" "${T_RESET}"
 }
@@ -261,6 +281,7 @@ tui_render_menu() {
     cols=$(tui_cols)
     local total=${#TUI_MENU_ITEMS[@]}
     local i
+    tui_blank_area "$start_row" "$end_row"
     for ((i = 0; i < total; i++)); do
         local row=$((start_row + i * 2))
         (( row > end_row )) && break
@@ -333,6 +354,9 @@ tui_render_list() {
     local n
     n=$(tui_list_n)
     local visible=$((end_row - start_row + 1))
+
+    # 先清空整个列表区域, 避免结果变少或切屏后残留旧行
+    tui_blank_area "$start_row" "$end_row"
 
     # 自动滚动保持选中可见
     local sel="${UI_SELECTED:-0}"
@@ -507,7 +531,11 @@ tui_render_hint() {
     tui_blank_row "$row"
     local hint
     if [[ "${UI_SCREEN:-menu}" == "search" ]]; then
-        hint="[/]搜索  [↑↓/jk]选择  [Enter]播放  [Space]暂停  [n]下一首  [p]上一首  [+/-]音量  [Esc]菜单  [q]退出"
+        if [[ "${UI_FOCUS:-list}" == "search" ]]; then
+            hint="输入关键词, [Enter]搜索  [Esc]返回菜单"
+        else
+            hint="[/]搜索  [↑↓/jk]选择  [Enter]播放  [Space]暂停  [n]下一首  [p]上一首  [+/-]音量  [Esc]菜单  [q]退出"
+        fi
     else
         hint="[↑↓/jk]选择  [Enter]确认  [/]搜索  [Space]暂停  [q]退出"
     fi
@@ -600,6 +628,24 @@ tui_render_cover() {
 }
 
 #==============================================================================
+# 开屏加载动画 (仅启动时播放一次, ASCII 帧避免终端字体乱码)
+#==============================================================================
+tui_splash_loading() {
+    local frames=('|' '/' '-' '\\') i pad cols
+    cols=$(tui_cols)
+    printf '%s' "${T_HIDE_CURSOR}"
+    printf '%s' "${T_CLR}"
+    for ((i = 0; i < 8; i++)); do
+        pad=$(( (cols - 26) / 2 ))
+        [[ $pad -lt 0 ]] && pad=0
+        printf '%s[2K%s[%d;1H' "${_T_ESC}" "${_T_ESC}" 1
+        printf '%*s%s LX-Music-Shell 加载中...\n' "$pad" '' "${frames[$((i % 4))]}"
+        sleep 0.06
+    done
+    printf '%s[2K%s[1;1H' "${_T_ESC}" "${_T_ESC}"
+}
+
+#==============================================================================
 # 进入备屏 + 隐藏光标 (每会话调用一次)
 #==============================================================================
 tui_enter() {
@@ -636,10 +682,9 @@ tui_render() {
     tui_render_topline
     tui_render_subtitle 2
 
-    local spectrum_h=3
-    if ((lines < 28)); then spectrum_h=0; fi
-    # 底部: 歌词(5) + 频谱(spectrum_h) + 提示(1) + 播放栏(1) + 进度(1)
-    local bottom=$((5 + spectrum_h + 1 + 1 + 1))
+    # 底部: 歌词(5) + 提示(1) + 播放栏(1) + 进度(1)
+    # (实时频谱动画已移除, 仅保留开屏加载动画)
+    local bottom=$((5 + 1 + 1 + 1))
     local main_start=4
     local main_end=$((lines - bottom))
     (( main_end < main_start + 3 )) && main_end=$((main_start + 3))
@@ -660,11 +705,7 @@ tui_render() {
     local lyric_start=$((main_end + 1))
     tui_render_lyrics "$lyric_start" 5
 
-    if ((spectrum_h > 0)); then
-        tui_render_spectrum $((lyric_start + 5)) "$spectrum_h"
-    fi
-
-    local hint_row=$((lyric_start + 5 + spectrum_h))
+    local hint_row=$((lyric_start + 5))
     tui_render_hint "$hint_row"
     tui_render_playbar $((lines - 1))
     tui_render_progress "$lines"
@@ -679,6 +720,7 @@ tui_render() {
 tui_render_help() {
     local start_row="$1" end_row="$2"
     local -a lines
+    tui_blank_area "$start_row" "$end_row"
     lines=(
         "LX-Music-Shell v${VERSION:-3.0} — 终端音乐播放器"
         ""

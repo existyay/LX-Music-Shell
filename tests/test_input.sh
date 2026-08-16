@@ -213,6 +213,25 @@ test_region_hit() {
 }
 
 #==============================================================================
+# 测试 8: 事件读取 (read_event) 的 Enter/ESC 处理
+#==============================================================================
+test_read_event_enter_esc() {
+    printf '\n%b\n' "${YELLOW}=== 测试 8: read_event Enter/ESC ===${NC}"
+
+    load_input
+
+    local out
+    # bash 的 read -n1 读到换行符时变量为空但返回成功, 必须转换为 Enter 事件
+    out=$(printf '\n' | { input_read_event 0.2; printf '%s|%s' "$EVENT_TYPE" "$EVENT_DATA"; })
+    assert_eq "read_event 换行 -> Enter" "5|" "$out"
+
+    load_input
+    # 单独的 ESC 键应解析为 EVENT_KEY_ESC, 不能变成 KEY_CHAR
+    out=$(printf '\033' | { input_read_event 0.2; printf '%s|%s' "$EVENT_TYPE" "$EVENT_DATA"; })
+    assert_eq "read_event 单独 ESC -> ESC" "15|" "$out"
+}
+
+#==============================================================================
 # 测试 7: 事件名称
 #==============================================================================
 test_event_names() {
@@ -245,6 +264,7 @@ main() {
     test_double_click
     test_region_hit
     test_event_names
+    test_read_event_enter_esc
 
     printf '\n========================================\n'
     printf '总计: %d 运行\n' "$TESTS_RUN"

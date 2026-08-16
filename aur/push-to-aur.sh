@@ -87,7 +87,9 @@ git add PKGBUILD .SRCINFO lx-music-shell.install lx-music-shell.1 \
         lx-music-sources.1 lx-music-shell-uninstall.1 \
         lx-music-shell.bash lx-music-shell.desktop
 
-git commit -m "Update to v3.0.0
+AUR_VERSION="$(grep -E '^pkgver=' "$SCRIPT_DIR/PKGBUILD" | head -1 | cut -d= -f2)"
+
+git commit -m "Update to ${AUR_VERSION}
 
 Unified TUI (menu/search) with mouse + keyboard input, real playback
 via mpv JSON IPC, netease direct source, and proper lib/sources

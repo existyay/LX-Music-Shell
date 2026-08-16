@@ -271,12 +271,19 @@ input_read_event() {
         return 1
     fi
 
+    # bash 的 read -n1 读到换行符 (Enter) 时返回成功但变量为空,
+    # 这里显式转换为 Enter 事件, 否则 Enter 会被当成 EVENT_NONE。
+    if [[ -z "$first_byte" ]]; then
+        input_parse_keyboard $'\n'
+        return 0
+    fi
+
     # ESC 序列 - 需要继续读取
     if [[ "$first_byte" == $'\033' ]]; then
         local next_byte
         if ! IFS= read -rsn1 -t 0.01 next_byte 2>/dev/null; then
-            # 单独的 ESC 键
-            input_parse_keyboard "$'\033'"
+            # 单独的 ESC 键 (first_byte 本身就是 ESC, 传字符串字面量会导致解析失败)
+            input_parse_keyboard "$first_byte"
             return 0
         fi
 
