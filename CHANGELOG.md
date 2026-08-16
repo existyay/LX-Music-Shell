@@ -22,6 +22,16 @@
 
 ---
 
+## [3.13.0] - 2026-08-16
+
+### 新增 (Minor)
+
+- 封面显示方案参考 bilibili-tui: Kitty 原生图形协议 + 其他终端 ffmpeg 半块真彩渲染
+- 新增 lib/cover_render.py: ffmpeg 解码 + ANSI 24bit 半块字符 (▀) 显示真实封面
+- 非 Kitty 终端也能看到封面, 不再只是 ASCII 占位
+
+---
+
 ## [3.12.0] - 2026-08-16
 
 ### 新增/修复 (Minor)

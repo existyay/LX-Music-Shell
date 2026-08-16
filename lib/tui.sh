@@ -704,13 +704,26 @@ tui_render_progress() {
 #
 # 若 kitty 且本地封面文件已下载 (TUI_COVER_FILE), 用 t=f 传输; 否则 ASCII 占位。
 #==============================================================================
+# 封面半块渲染器路径 (参考 bilibili-tui halfblocks fallback)
+if [[ -z "${LXMS_COVER_RENDER:-}" ]]; then
+    _tui_self_dir="${BASH_SOURCE[0]%/*}"
+    [[ -f "$_tui_self_dir/cover_render.py" ]] && LXMS_COVER_RENDER="$_tui_self_dir/cover_render.py"
+fi
+
 tui_render_cover() {
     local row="$1" col="${2:-1}" size="${3:-10}"
-    if [[ -n "${TUI_COVER_FILE:-}" ]] && [[ -f "$TUI_COVER_FILE" ]] && \
-       [[ "${TERM:-}" == *kitty* || "${TERM:-}" == xterm-kitty* ]]; then
-        tui_goto "$row" "$col"
-        printf '\033_Ga=T,f=100,t=f,c=%d,r=%d;%s\033\\' "$size" "$size" "$TUI_COVER_FILE"
-        return 0
+    if [[ -n "${TUI_COVER_FILE:-}" ]] && [[ -f "$TUI_COVER_FILE" ]]; then
+        if [[ "${TERM:-}" == *kitty* || "${TERM:-}" == xterm-kitty* ]]; then
+            tui_goto "$row" "$col"
+            printf '\033_Ga=T,f=100,t=f,c=%d,r=%d;%s\033\\' "$size" "$size" "$TUI_COVER_FILE"
+            return 0
+        fi
+        # 非 kitty 终端: 用 ffmpeg + 半块字符显示真实封面
+        if [[ -n "${LXMS_COVER_RENDER:-}" ]] && [[ -f "${LXMS_COVER_RENDER:-}" ]]; then
+            tui_goto "$row" "$col"
+            python3 "$LXMS_COVER_RENDER" "$TUI_COVER_FILE" $((size * 2)) "$size" 2>/dev/null
+            return 0
+        fi
     fi
     # ASCII 占位
     tui_goto "$row" "$col"
