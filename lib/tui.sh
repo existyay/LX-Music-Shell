@@ -242,7 +242,8 @@ tui_lyric_parse() {
             # 跳过元数据行
             [[ "$text" == "ti:"* || "$text" == "ar:"* || "$text" == "al:"* || "$text" == "by:"* || "$text" == "offset:"* ]] && break
             ss="${ss%%.*}"  # 去掉毫秒
-            t=$(( mm * 60 + ${ss:-0} ))
+            # 10# 防止 09 被解释为八进制
+            t=$(( 10#$mm * 60 + 10#${ss:-0} ))
             text="${text#"${text%%[![:space:]]*}"}"  # 去前导空白
             [[ -n "$text" ]] && { TUI_LRC_TIMES+=("$t"); TUI_LRC_TEXTS+=("$text"); }
             break  # 一行只取首个时间标签的正文 (简单处理)
