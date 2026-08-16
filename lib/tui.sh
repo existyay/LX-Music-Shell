@@ -713,15 +713,16 @@ fi
 tui_render_cover() {
     local row="$1" col="${2:-1}" size="${3:-10}"
     if [[ -n "${TUI_COVER_FILE:-}" ]] && [[ -f "$TUI_COVER_FILE" ]]; then
+        # 优先使用 ffmpeg 半块真彩渲染 (通用且稳定, bilibili-tui 同款 fallback)
+        if [[ -n "${LXMS_COVER_RENDER:-}" ]] && [[ -f "${LXMS_COVER_RENDER:-}" ]] && command -v python3 >/dev/null 2>&1 && command -v ffmpeg >/dev/null 2>&1; then
+            tui_goto "$row" "$col"
+            python3 "$LXMS_COVER_RENDER" "$TUI_COVER_FILE" $((size * 2)) "$size" 2>/dev/null
+            return 0
+        fi
+        # Kitty 原生图形协议 (仅在半块渲染不可用时)
         if [[ "${TERM:-}" == *kitty* || "${TERM:-}" == xterm-kitty* ]]; then
             tui_goto "$row" "$col"
             printf '\033_Ga=T,f=100,t=f,c=%d,r=%d;%s\033\\' "$size" "$size" "$TUI_COVER_FILE"
-            return 0
-        fi
-        # 非 kitty 终端: 用 ffmpeg + 半块字符显示真实封面
-        if [[ -n "${LXMS_COVER_RENDER:-}" ]] && [[ -f "${LXMS_COVER_RENDER:-}" ]]; then
-            tui_goto "$row" "$col"
-            python3 "$LXMS_COVER_RENDER" "$TUI_COVER_FILE" $((size * 2)) "$size" 2>/dev/null
             return 0
         fi
     fi
@@ -999,9 +1000,10 @@ tui_render_playing() {
         128)   qlabel="SQ" ;;
     esac
 
-    # 封面: kitty 图形协议优先; 否则绘制 ASCII 封面盒
-    if [[ -n "${TUI_COVER_FILE:-}" ]] && [[ -f "$TUI_COVER_FILE" ]] &&        [[ "${TERM:-}" == *kitty* || "${TERM:-}" == xterm-kitty* ]]; then
-        tui_render_cover "$start_row" 2 10
+    # 封面: 优先真实封面 (kitty/半块真彩), 无封面时绘制 ASCII 封面盒
+    local cover_size=8
+    if [[ -n "${TUI_COVER_FILE:-}" ]] && [[ -f "$TUI_COVER_FILE" ]]; then
+        tui_render_cover "$start_row" 2 "$cover_size"
     else
         local cw=22 ch=7 left=2 top="$start_row" r
         tui_goto "$top" "$left"
@@ -1021,8 +1023,8 @@ tui_render_playing() {
         printf '%*s%s%*s' "$pad" '' "$title_line" $((cw - 2 - tw - pad)) ''
     fi
 
-    # 歌曲信息 (居中)
-    local info_row=$((start_row + 8))
+    # 歌曲信息 (居中, 在封面下方)
+    local info_row=$((start_row + cover_size + 1))
     local line
     line="${name} - ${artist}"
     line="$(tui_trunc "$line" "$cols")"
