@@ -726,16 +726,16 @@ tui_render_cover() {
     (( height < 2 )) && height=2
     local width=$((height * 2))
     if [[ -n "${TUI_COVER_FILE:-}" ]] && [[ -f "$TUI_COVER_FILE" ]]; then
-        # Kitty 原生图形协议 (最清晰)
-        if [[ "${TERM:-}" == *kitty* || "${TERM:-}" == xterm-kitty* ]]; then
-            tui_goto "$row" "$col"
-            printf '\033_Ga=T,f=100,t=f,c=%d,r=%d;%s\033\\' "$width" "$height" "$TUI_COVER_FILE"
-            return 0
-        fi
-        # 非 Kitty: ffmpeg 半块真彩渲染 (bilibili-tui 同款 fallback)
+        # 优先使用 ffmpeg 半块真彩渲染 (兼容所有真彩终端, 包括 Kitty)
         if [[ -n "${LXMS_COVER_RENDER:-}" ]] && [[ -f "${LXMS_COVER_RENDER:-}" ]] && command -v python3 >/dev/null 2>&1 && command -v ffmpeg >/dev/null 2>&1; then
             tui_goto "$row" "$col"
             python3 "$LXMS_COVER_RENDER" "$TUI_COVER_FILE" "$width" "$height" 2>/dev/null
+            return 0
+        fi
+        # Kitty 原生图形协议 (备选, 半块渲染不可用时)
+        if [[ "${TERM:-}" == *kitty* || "${TERM:-}" == xterm-kitty* ]]; then
+            tui_goto "$row" "$col"
+            printf '\033_Ga=T,f=100,t=f,c=%d,r=%d;%s\033\\' "$width" "$height" "$TUI_COVER_FILE"
             return 0
         fi
     fi
