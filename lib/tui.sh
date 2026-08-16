@@ -70,18 +70,18 @@ UI_HELP_PAGE="${UI_HELP_PAGE:-0}"
 #==============================================================================
 # 主菜单项 (label|action)
 #==============================================================================
+# v3.15.x: 源管理菜单全部移除.
+# 理由: netease/kugou/kuwo/qq/migu 已通过 sources/ 内置,
+#       yinyuan 聚合所有可用源, _auto_resolve_url 播放时无感切源.
+#       手动切换/测试/更新/导入源的操作流已无意义.
 TUI_MENU_ITEMS=(
     "搜索音乐|search"
     "搜索歌单|playlist_search"
     "今日推荐|recommend"
     "播放列表|playlist"
     "正在播放|playing"
-    "切换音源|source"
     "切换音质|quality"
     "播放模式|mode"
-    "测试源连通|test_sources"
-    "更新源|update_sources"
-    "导入源|import_source"
     "帮助|help"
     "退出|quit"
 )
@@ -163,7 +163,7 @@ tui_menu_step() {
 tui_item_count() {
     case "${UI_SCREEN:-menu}" in
         search)         tui_list_n ;;
-        source_select|quality_select|playlist_select) printf '%d' "${#TUI_SELECT_ITEMS[@]}" ;;
+        quality_select|playlist_select) printf '%d' "${#TUI_SELECT_ITEMS[@]}" ;;
         playing)        printf '0' ;;
         *)              printf '%d' "${#TUI_MENU_ITEMS[@]}" ;;
     esac
@@ -673,7 +673,7 @@ tui_render_hint() {
         playing)
             hint="[Esc]返回  [Space]暂停/继续  [n]下一首  [p]上一首  [+/-]音量  [q]退出"
             ;;
-        source_select|quality_select)
+        quality_select)
             hint="[↑↓/jk]选择  [Enter]确认  [Esc]返回菜单  [q]退出"
             ;;
         *)
@@ -775,27 +775,41 @@ if [[ -z "${LXMS_COVER_RENDER:-}" ]]; then
     [[ -f "$_tui_self_dir/cover_render.py" ]] && LXMS_COVER_RENDER="$_tui_self_dir/cover_render.py"
 fi
 
+# 检查封面文件是否真正的 PNG (读 magic bytes).
+# 返回 0 表示 PNG, 1 表示非 PNG/不可读.
+# Kitty 协议 f=100 仅支持 PNG, JPG 即使后缀是 .jpg 但内容是 PNG 也算 PNG.
+_lxms_cover_is_png() {
+    local f="$1"
+    [[ -s "$f" ]] || return 1
+    # PNG magic: 89 50 4E 47 0D 0A 1A 0A
+    local sig
+    sig=$(head -c 8 "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')
+    [[ "$sig" == "89504e470d0a1a0a" ]]
+}
+
 tui_render_cover() {
     local row="$1" col="${2:-1}" height="${3:-10}"
     (( height < 2 )) && height=2
     local width=$((height * 2))
-    if [[ -n "${TUI_COVER_FILE:-}" ]] && [[ -f "$TUI_COVER_FILE" ]]; then
-        # 优先级 1: Kitty 终端优先用原生图形协议 (PNG, 高质量, 渲染最准确)
+    if [[ -n "${TUI_COVER_FILE:-}" ]] && [[ -f "$TUI_COVER_FILE" ]] \
+        && _lxms_cover_is_png "$TUI_COVER_FILE"; then
+        # 优先级 1: Kitty 终端 + 文件是真实 PNG -> 原生图形协议 (高质量)
         # 原生 PNG 协议由 Kitty 内部 GPU 缩放, 比 halfblock 字符拼接更清晰.
-        # q=2 (quiet) 避免 Kitty 启动时显示传输进度提示; z=0 表示不压缩 (PNG 已压缩).
+        # 仅在文件确实是 PNG 时才用 (f=100 严格要求 PNG 格式).
         if [[ "${TERM:-}" == *kitty* || "${TERM:-}" == xterm-kitty* ]]; then
             tui_goto "$row" "$col"
             printf '\033_Ga=T,t=f,f=100,z=0,c=%d,r=%d,q=2;%s\033\\' "$width" "$height" "$TUI_COVER_FILE"
             return 0
         fi
         # 优先级 2: ffmpeg 半块真彩渲染 (兼容所有真彩终端: iTerm/wezterm/alacritty 等)
+        # PNG/JPG/WebP 都用 ffmpeg 解码, 不依赖文件后缀.
         if [[ -n "${LXMS_COVER_RENDER:-}" ]] && [[ -f "${LXMS_COVER_RENDER:-}" ]] && command -v python3 >/dev/null 2>&1 && command -v ffmpeg >/dev/null 2>&1; then
             tui_goto "$row" "$col"
             python3 "$LXMS_COVER_RENDER" "$TUI_COVER_FILE" "$width" "$height" 2>/dev/null
             return 0
         fi
     fi
-    # ASCII 占位
+    # ASCII 占位 (无封面/非 PNG/渲染器不可用时)
     tui_goto "$row" "$col"
     printf '%s♪♫♪%s' "${T_FG_MAGENTA}${T_BOLD}" "${T_RESET}"
     return 0
@@ -928,7 +942,7 @@ tui_render_frame() {
         playlist_select)
             tui_render_playlist_select "$main_start" "$main_end"
             ;;
-        source_select|quality_select)
+        quality_select)
             tui_render_select "$main_start" "$main_end"
             ;;
         menu|*)
@@ -974,7 +988,7 @@ tui_render_help() {
         "  切歌:  n 下一首 / p 上一首"
         "  音量:  + / - 调节"
         "  模式:  m 循环播放模式"
-        "  音源:  s 切换音源, c 切换音质"
+        "  音质:  c 切换音质"
         "  退出:  q / Esc / Ctrl-C"
     )
     local i
@@ -1299,7 +1313,7 @@ tui_register_regions() {
                 input_register_region "list_$i" $((main_start + 1 + i)) 1 1 "$cols"
             done
             ;;
-        source_select|quality_select|playlist_select)
+        quality_select|playlist_select)
             local visible=$((main_end - main_start))
             local i
             for ((i = 0; i < visible; i++)); do

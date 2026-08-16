@@ -840,6 +840,20 @@ playlist_cover_cache_path() {
     printf '%s/%s.jpg' "${CACHE_DIR}/covers" "${hash:-playlist}"
 }
 
+# 检查下载的封面文件是否真的是图片 (读 magic bytes).
+# 防止把上游错误页/HTML/纯文本当成图片 touch ready (主循环据此才会显示).
+_lxms_cover_is_valid_image() {
+    local f="$1"
+    [[ -s "$f" ]] || return 1
+    # PNG: 89 50 4E 47, JPEG: FF D8 FF, GIF: GIF8, WebP: RIFF....WEBP, BMP: BM
+    local sig
+    sig=$(head -c 4 "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')
+    case "$sig" in
+        89504e47|ffd8ff*|47494638|52494646|424d*) return 0 ;;
+    esac
+    return 1
+}
+
 # 后台下载歌单封面 (完成时 touch ready)
 fetch_playlist_cover_async() {
     local pid="$1" cover="$2" out="$3"
@@ -848,13 +862,17 @@ fetch_playlist_cover_async() {
     if [[ ! -s "$out" ]]; then
         curl -s --connect-timeout 6 --max-time 15 -o "$out" "$cover" 2>/dev/null || rm -f "$out"
     fi
-    if [[ -s "$out" ]]; then
+    # v3.15.x: 仅在文件确实是图片时才标记 ready + 生成 PNG.
+    # 否则上游返回的 HTML/JSON 错误页会被当成"封面"导致 TUI 静默失败.
+    if _lxms_cover_is_valid_image "$out"; then
         local png="${out%.jpg}.png"
         if [[ ! -s "$png" ]] && command -v ffmpeg >/dev/null 2>&1; then
             ffmpeg -v error -i "$out" -frames:v 1 "$png" >/dev/null 2>&1 || rm -f "$png"
         fi
         touch "$out.ready"
         touch "${CACHE_DIR}/covers/.playlist-covers.ready"
+    else
+        rm -f "$out"
     fi
 }
 
@@ -867,13 +885,17 @@ fetch_cover_async() {
     if [[ ! -s "$out" ]]; then
         curl -s --connect-timeout 6 --max-time 15 -o "$out" "$cover" 2>/dev/null || rm -f "$out"
     fi
-    if [[ -s "$out" ]]; then
+    if _lxms_cover_is_valid_image "$out"; then
         # 转出 PNG 供 kitty 原生图形协议使用 (f=100 PNG)
         local png="${out%.jpg}.png"
         if [[ ! -s "$png" ]] && command -v ffmpeg >/dev/null 2>&1; then
             ffmpeg -v error -i "$out" -frames:v 1 "$png" >/dev/null 2>&1 || rm -f "$png"
         fi
         touch "$out.ready"
+    else
+        # 上游返回了 HTML/JSON/纯文本等非图片内容 (常见于防盗链/CORS 拒绝),
+        # 不要 touch ready, 让 TUI_COVER_FILE 保持空 -> 走 ASCII 占位.
+        rm -f "$out"
     fi
 }
 do_play() {
@@ -2098,67 +2120,6 @@ tui_cycle_quality() {
     save_config
 }
 
-tui_cycle_source() {
-    local -a srcs
-    srcs=()
-
-    local s
-    for s in netease kugou kuwo qq migu; do
-        source_is_available "$s" && srcs+=("$s")
-    done
-
-    # 追加用户自定义源 (yinyuan/sources.list), 使切源功能覆盖自定义源
-    local name
-    for name in $(printf '%s\n' "${!SOURCE_URLS[@]}" | sort); do
-        case "$name" in
-            netease|kugou|kuwo|qq|migu|ximalaya) continue ;;
-        esac
-        source_is_available "$name" && srcs+=("$name")
-    done
-
-    [[ ${#srcs[@]} -eq 0 ]] && return 1
-
-    local cur found=-1 i
-    cur=$(normalize_source_id "${CURRENT_SOURCE:-netease}")
-    for i in "${!srcs[@]}"; do
-        [[ "${srcs[i]}" == "$cur" ]] && { found=$i; break; }
-    done
-    local next=$(( (found + 1) % ${#srcs[@]} ))
-    tui_apply_source_selection "${srcs[next]}"
-}
-
-# 打开音源选择子菜单
-tui_op_open_source_select() {
-    # shellcheck disable=SC2034  # TUI_SELECT_TITLE 由 lib/tui.sh 读取渲染
-    TUI_SELECT_TITLE="选择音源"
-    TUI_SELECT_ITEMS=()
-    TUI_SELECT_VALUES=()
-
-    local src
-    for src in netease kugou kuwo qq migu; do
-        if source_is_available "$src"; then
-            TUI_SELECT_ITEMS+=("$(source_display_name "$src")")
-            TUI_SELECT_VALUES+=("$src")
-        fi
-    done
-    # 追加自定义源 (排除内置已加)
-    local name
-    for name in $(printf '%s\n' "${!SOURCE_URLS[@]}" | sort); do
-        case "$name" in
-            netease|kugou|kuwo|qq|migu|ximalaya) continue ;;
-        esac
-        if source_is_available "$name"; then
-            TUI_SELECT_ITEMS+=("自定义源 $name")
-            TUI_SELECT_VALUES+=("$name")
-        fi
-    done
-
-    UI_SCREEN="source_select"
-    UI_FOCUS="list"
-    UI_SELECTED=0
-    UI_SCROLL_TOP=0
-}
-
 # 打开音质选择子菜单
 tui_op_open_quality_select() {
     # shellcheck disable=SC2034  # TUI_SELECT_TITLE 由 lib/tui.sh 读取渲染
@@ -2166,20 +2127,6 @@ tui_op_open_quality_select() {
     TUI_SELECT_ITEMS=("HiRes (母带)" "FLAC (无损)" "HQ (320k)" "SQ (128k)")
     TUI_SELECT_VALUES=(hires flac 320 128)
     UI_SCREEN="quality_select"
-    UI_FOCUS="list"
-    UI_SELECTED=0
-    UI_SCROLL_TOP=0
-}
-
-# 应用音源选择
-tui_apply_source_selection() {
-    local src="$1"
-    source_is_available "$src" || return 1
-    DEFAULT_SOURCE="$src"
-    CURRENT_SOURCE="$src"
-    CURRENT_SOURCE_NAME="$(source_display_name "$src")"
-    save_config
-    UI_SCREEN="menu"
     UI_FOCUS="list"
     UI_SELECTED=0
     UI_SCROLL_TOP=0
@@ -2240,10 +2187,6 @@ tui_op_select() {
         UI_SCREEN="search"; UI_FOCUS="list"; UI_SELECTED=0; UI_SCROLL_TOP=0
         return
     fi
-    if [[ "${UI_SCREEN:-menu}" == "source_select" ]]; then
-        tui_apply_source_selection "${TUI_SELECT_VALUES[$UI_SELECTED]:-}"
-        return
-    fi
     if [[ "${UI_SCREEN:-menu}" == "quality_select" ]]; then
         tui_apply_quality_selection "${TUI_SELECT_VALUES[$UI_SELECTED]:-}"
         return
@@ -2260,21 +2203,8 @@ tui_op_select() {
             ;;
         playlist) UI_SCREEN="search"; UI_FOCUS="list"; UI_QUERY=""; UI_SELECTED=0; UI_SCROLL_TOP=0 ;;
         playing)  UI_SCREEN="playing"; UI_FOCUS="list" ;;
-        source)   tui_op_open_source_select ;;
         quality)  tui_op_open_quality_select ;;
         mode)     tui_cycle_mode; save_config ;;
-        test_sources)
-            UI_SCREEN="search"; UI_FOCUS="list"; UI_QUERY=""; UI_SELECTED=0; UI_SCROLL_TOP=0
-            test_all_sources
-            ;;
-        update_sources)
-            UI_SCREEN="search"; UI_FOCUS="list"; UI_QUERY=""; UI_SELECTED=0; UI_SCROLL_TOP=0
-            fetch_source_api
-            ;;
-        import_source)
-            UI_SCREEN="search"; UI_FOCUS="list"; UI_QUERY=""; UI_SELECTED=0; UI_SCROLL_TOP=0
-            echo -e "${T_DIM}${T_FG_CYAN}提示: 在 TUI 中按 s 键切换音源, 或在 TUI 主菜单选 '切换音源'.${T_RESET}"
-            ;;
         help)     UI_SCREEN="help" ;;
         quit)     UI_QUIT=1 ;;
     esac

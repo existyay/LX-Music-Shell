@@ -22,6 +22,42 @@
 
 ---
 
+## [3.15.1] - 2026-08-16
+
+### 变更
+
+- **移除源管理菜单 (yinyuan 聚合 + 自动无感切源后已不需要)**:
+  - 主菜单删除 `切换音源` / `测试源连通` / `更新源` / `导入源` 4 项
+  - 删除 `tui_op_open_source_select` / `tui_apply_source_selection` / `tui_cycle_source` 死代码
+  - 删除 `source_select` 屏幕处理
+  - 帮助提示去除 `s 切换音源`
+  - **架构说明**: netease/kugou/kuwo/qq/migu 已通过 `sources/` 内置,
+    yinyuan 聚合所有可用源 + 自定义源, `_auto_resolve_url` 播放时
+    自动遍历同名歌曲找首个可解析的源, 用户无需手动切源.
+  - CLI `import_source` 函数保留 (yinyuan CLI 仍可用), 但 TUI 入口消失
+
+### 修复
+
+- **歌单/歌曲封面不能显示 (kitty 终端)**: 
+  - **根因**: kitty 原生协议 `f=100` 严格要求 PNG, 但 `tui_render_cover` 不检查
+    文件实际格式就发协议, 当 `TUI_COVER_FILE` 指向 JPG (或上游返回的是 PNG 但
+    用了 .jpg 后缀) 时, kitty 静默失败 -> 用户看不到封面.
+  - 修复: 渲染前用 magic bytes 验证文件是真正的 PNG, 否则走 halfblock fallback
+    (ffmpeg 可解码任意格式). 在 kitty 终端也不再"强制"走 kitty 协议.
+  - **额外修复**: `fetch_cover_async` / `fetch_playlist_cover_async` 下载到非图片内容
+    (HTML/JSON/纯文本, 常见于防盗链/CORS 拒绝) 时不再 touch `.ready`,
+    避免主循环误设 `TUI_COVER_FILE` -> 走 ASCII 占位而不是静默失败.
+
+- **状态栏/桌面任务栏显示的歌曲与 TUI 不一致, 但控制操作正常**:
+  - **根因**: `mpris_bridge.py` 的 `poll()` 中 `mpv_get("media-title")` 无条件覆盖
+    状态文件的 `CURRENT_TRACK`. mpv 播放流媒体 URL 时可能从上游
+    (ID3 标签 / HTTP 头 / 文件名) 重新读取标题, 覆盖我们通过
+    `--force-media-title` 设置的值, 导致桌面任务栏显示错位.
+  - 修复: 状态文件的标题现在是权威值, 仅在状态文件为空 (刚启动/未在 TUI)
+    时才回退到 mpv 的 media-title.
+
+---
+
 ## [3.15.0] - 2026-08-16
 
 ### 变更 (Major - 启动方式统一)

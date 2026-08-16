@@ -346,9 +346,14 @@ def main():
             "shuffle": state.get("shuffle"),
         }
         try:
-            title = mpv_get(sock_path, "media-title")
-            if title:
-                state["title"] = title
+            # v3.15.x: 状态文件的标题优先, 不被 mpv 的 media-title 覆盖.
+            # mpv 在播放流媒体 URL 时可能从上游重新读取标题 (ID3/HTTP头),
+            # 会覆盖我们通过 --force-media-title 设置的值, 导致桌面任务栏
+            # 显示与 TUI/软件不一致. 状态文件才是权威值.
+            title_from_mpv = mpv_get(sock_path, "media-title")
+            if not state.get("title") and title_from_mpv:
+                # 状态文件为空 (刚启动 / 未在 TUI) -> 才回退到 mpv 的值
+                state["title"] = title_from_mpv
             dur = mpv_get(sock_path, "duration")
             if isinstance(dur, (int, float)) and dur is not None:
                 state["duration_us"] = int(dur * 1_000_000)
