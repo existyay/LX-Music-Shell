@@ -15,7 +15,7 @@
 #==============================================================================
 
 # 版本信息
-VERSION="3.11.1"
+VERSION="3.12.0"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
@@ -79,6 +79,8 @@ mkdir -p "$CONFIG_DIR" "$DATA_DIR" "$CACHE_DIR"
 # 配置文件
 CONFIG_FILE="$CONFIG_DIR/config"
 SOURCES_FILE="$CONFIG_DIR/sources.list"
+MPRIS_STATE_FILE="$CACHE_DIR/mpris-state"
+MPRIS_CMD_FILE="$CACHE_DIR/mpris-cmd"
 
 declare -A SOURCE_URLS=()
 
@@ -769,6 +771,17 @@ update_terminal_title() {
     fi
 }
 
+# 同步播放状态到 MPRIS 桥接 (桌面状态栏)
+save_mpris_state() {
+    mkdir -p "$CACHE_DIR"
+    cat > "$MPRIS_STATE_FILE" <<EOF
+PLAYER_STATUS="${PLAYER_STATUS:-stopped}"
+PLAY_MODE="${PLAY_MODE:-list}"
+CURRENT_TRACK="${CURRENT_TRACK:-}"
+VOLUME="${VOLUME:-80}"
+EOF
+}
+
 # 源是否真实可用 (有注册搜索函数或已配置自定义搜索 URL)
 source_is_available() {
     local src
@@ -941,6 +954,7 @@ do_play() {
 
     # 启动网络监控 (后台守护)
     start_watchdog
+    save_mpris_state
     return 0
 }
 
@@ -950,6 +964,7 @@ do_pause() {
         return
     fi
     player_pause
+    save_mpris_state
     echo -e "\033[33m⏸ 已暂停\033[0m"
 }
 
@@ -959,6 +974,7 @@ do_resume() {
         return
     fi
     player_resume
+    save_mpris_state
     echo -e "\033[32m▶ 继续播放\033[0m"
 }
 
@@ -969,6 +985,7 @@ do_stop() {
     rm -f "${CACHE_DIR}/player-state" 2>/dev/null || true
     CURRENT_TRACK=""
     update_terminal_title
+    save_mpris_state
     [[ "${LXMS_TUI_ACTIVE:-0}" != "1" ]] && echo -e "\033[31m⏹ 已停止\033[0m"
 }
 
@@ -1780,6 +1797,7 @@ set_play_mode() {
     case "$mode" in
         list|loop|single|random)
             PLAY_MODE="$mode"
+            save_mpris_state
             echo -e "\033[32m播放模式: $PLAY_MODE\033[0m"
             ;;
         *)
@@ -2202,6 +2220,7 @@ tui_cycle_mode() {
         single) PLAY_MODE="random" ;;
         *)      PLAY_MODE="list" ;;
     esac
+    save_mpris_state
 }
 
 tui_cycle_quality() {
@@ -2492,6 +2511,30 @@ interactive_mode_tui() {
             TUI_DIRTY=1
         fi
 
+        # 桌面 MPRIS 状态栏下发的控制命令
+        if [[ -f "$MPRIS_CMD_FILE" ]]; then
+            local mcmd
+            while IFS= read -r mcmd; do
+                case "$mcmd" in
+                    next)       do_next ;;
+                    previous)   do_prev ;;
+                    playpause)  do_pause_or_resume ;;
+                    play)
+                        if declare -F player_is_running >/dev/null 2>&1 && player_is_running; then
+                            player_resume
+                        elif [[ ${#PLAYLIST[@]} -gt 0 ]]; then
+                            do_play "$PLAYLIST_INDEX" --no-message
+                        fi
+                        ;;
+                    pause)      player_pause ;;
+                    stop)       do_stop ;;
+                    mode:*)     set_play_mode "${mcmd#mode:}"; save_config ;;
+                esac
+            done < "$MPRIS_CMD_FILE"
+            rm -f "$MPRIS_CMD_FILE"
+            TUI_DIRTY=1
+        fi
+
         # 状态/进度变化才触发重绘, 避免无变化时每帧全屏重绘造成闪屏
         if [[ "${PLAYER_STATUS}" != "$snap_status" || "${PLAYBACK_POSITION:-0}" != "$snap_pos" || "${PLAYBACK_DURATION:-0}" != "$snap_dur" || "${CURRENT_TRACK}" != "$snap_track" || "${PLAY_MODE}" != "$snap_mode" || "${VOLUME}" != "$snap_vol" || "${NETWORK_STATUS}" != "$snap_net" || "${CURRENT_SOURCE_NAME}" != "$snap_src" || "${DEFAULT_QUALITY}" != "$snap_qual" ]]; then
             TUI_DIRTY=1
@@ -2508,6 +2551,7 @@ interactive_mode_tui() {
             snap_net="${NETWORK_STATUS}"
             snap_src="${CURRENT_SOURCE_NAME}"
             snap_qual="${DEFAULT_QUALITY}"
+            save_mpris_state
             TUI_DIRTY=0
         fi
 

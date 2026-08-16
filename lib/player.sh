@@ -161,7 +161,10 @@ player_start() {
 
     # 启动 MPRIS 桥接 (桌面环境识别为活动媒体播放器)
     if [[ "$backend_name" == "mpv" ]] && [[ -n "${LXMS_MPRIS_BRIDGE:-}" ]] && [[ -f "${LXMS_MPRIS_BRIDGE:-}" ]] && [[ -n "$PLAYER_SOCKET" ]]; then
-        python3 "$LXMS_MPRIS_BRIDGE" "$PLAYER_SOCKET" "$title" "$artist" "$album" "$cover" &
+        local mpris_state mpris_cmd
+        mpris_state="${CACHE_DIR:-$sock_dir}/mpris-state"
+        mpris_cmd="${CACHE_DIR:-$sock_dir}/mpris-cmd"
+        python3 "$LXMS_MPRIS_BRIDGE" "$PLAYER_SOCKET" "$title" "$artist" "$album" "$cover" "$mpris_state" "$mpris_cmd" &
         MPRIS_BRIDGE_PID=$!
         disown "$MPRIS_BRIDGE_PID" 2>/dev/null || true
     fi

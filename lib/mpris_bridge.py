@@ -7,7 +7,7 @@ LX-Music-Shell MPRIS D-Bus bridge.
 支持 播放/暂停/停止/上一首/下一首/Seek/进度/元数据。
 
 用法:
-  mpris_bridge.py <mpv-ipc-socket> "<title>" ["<artist>"] ["<album>"] ["<cover-url>"]
+  mpris_bridge.py <mpv-ipc-socket> "<title>" ["<artist>"] ["<album>"] ["<cover-url>"] [<state-file>] [<cmd-file>]
 
 依赖 (可选): python-dbus (Arch: python-dbus)
 若未安装, 脚本静默退出, 不影响播放。
@@ -79,6 +79,8 @@ def main():
     initial_artist = sys.argv[3] if len(sys.argv) > 3 else ""
     initial_album = sys.argv[4] if len(sys.argv) > 4 else ""
     initial_cover = sys.argv[5] if len(sys.argv) > 5 else ""
+    state_file = sys.argv[6] if len(sys.argv) > 6 else ""
+    cmd_file = sys.argv[7] if len(sys.argv) > 7 else ""
 
     state = {
         "title": initial_title,
@@ -89,9 +91,47 @@ def main():
         "position_us": 0,
         "paused": False,
         "volume": 1.0,
+        "play_mode": "list",
+        "loop_status": "None",
+        "shuffle": False,
         "can_go_next": True,
         "can_go_previous": True,
     }
+
+    def append_cmd(cmd):
+        if not cmd_file:
+            return
+        try:
+            with open(cmd_file, "a", encoding="utf-8") as f:
+                f.write(cmd + "\n")
+        except Exception:
+            pass
+
+    def read_state_file():
+        if not state_file or not os.path.exists(state_file):
+            return
+        try:
+            with open(state_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    v = v.strip().strip('"')
+                    if k == "PLAY_MODE":
+                        state["play_mode"] = v
+                        if v == "loop":
+                            state["loop_status"] = "Playlist"; state["shuffle"] = False
+                        elif v == "single":
+                            state["loop_status"] = "Track"; state["shuffle"] = False
+                        elif v == "random":
+                            state["loop_status"] = "Playlist"; state["shuffle"] = True
+                        else:
+                            state["loop_status"] = "None"; state["shuffle"] = False
+                    elif k == "CURRENT_TRACK" and v:
+                        state["title"] = v
+        except Exception:
+            pass
 
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = dbus.SessionBus()
@@ -118,12 +158,25 @@ def main():
                 vol = int(round(v * 100))
                 mpv_cmd(sock_path, ["set_property", "volume", vol])
             elif iface == PLAYER_IFACE and prop == "LoopStatus":
-                # 简单映射到 mpv loop-playlist 属性
                 try:
                     loop = str(value)
                 except Exception:
                     return
-                mpv_cmd(sock_path, ["set_property", "loop-playlist", "inf" if loop == "Playlist" else "no"])
+                if loop == "Track":
+                    append_cmd("mode:single")
+                elif loop == "Playlist":
+                    append_cmd("mode:loop")
+                else:
+                    append_cmd("mode:list")
+            elif iface == PLAYER_IFACE and prop == "Shuffle":
+                try:
+                    shuf = bool(value)
+                except Exception:
+                    return
+                if shuf:
+                    append_cmd("mode:random")
+                else:
+                    append_cmd("mode:list")
 
         @dbus.service.method(PROP_IFACE, in_signature="s", out_signature="a{sv}")
         def GetAll(self, iface):
@@ -178,9 +231,9 @@ def main():
             status = "Paused" if state["paused"] else "Playing"
             return {
                 "PlaybackStatus": dbus.String(status),
-                "LoopStatus": dbus.String("None"),
+                "LoopStatus": dbus.String(state["loop_status"]),
                 "Rate": dbus.Double(1.0),
-                "Shuffle": dbus.Boolean(False),
+                "Shuffle": dbus.Boolean(state["shuffle"]),
                 "Metadata": dbus.Dictionary(meta, signature="sv"),
                 "Volume": dbus.Double(state["volume"]),
                 "Position": dbus.Int64(state["position_us"]),
@@ -208,33 +261,27 @@ def main():
 
         @dbus.service.method(PLAYER_IFACE, in_signature="", out_signature="")
         def Play(self):
-            mpv_cmd(sock_path, ["set_property", "pause", False])
-            state["paused"] = False
+            append_cmd("play")
 
         @dbus.service.method(PLAYER_IFACE, in_signature="", out_signature="")
         def Pause(self):
-            mpv_cmd(sock_path, ["set_property", "pause", True])
-            state["paused"] = True
+            append_cmd("pause")
 
         @dbus.service.method(PLAYER_IFACE, in_signature="", out_signature="")
         def PlayPause(self):
-            if state["paused"]:
-                self.Play()
-            else:
-                self.Pause()
+            append_cmd("playpause")
 
         @dbus.service.method(PLAYER_IFACE, in_signature="", out_signature="")
         def Stop(self):
-            mpv_cmd(sock_path, ["stop"])
-            state["paused"] = False
+            append_cmd("stop")
 
         @dbus.service.method(PLAYER_IFACE, in_signature="", out_signature="")
         def Next(self):
-            mpv_cmd(sock_path, ["playlist-next"])
+            append_cmd("next")
 
         @dbus.service.method(PLAYER_IFACE, in_signature="", out_signature="")
         def Previous(self):
-            mpv_cmd(sock_path, ["playlist-prev"])
+            append_cmd("previous")
 
         @dbus.service.method(PLAYER_IFACE, in_signature="x", out_signature="")
         def Seek(self, offset_us):
@@ -251,6 +298,7 @@ def main():
             mpv_cmd(sock_path, ["loadfile", uri])
 
     def poll():
+        read_state_file()
         try:
             title = mpv_get(sock_path, "media-title")
             if title:
