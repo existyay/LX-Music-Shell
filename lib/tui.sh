@@ -145,6 +145,16 @@ tui_list_n() {
     if [[ -n "${PLAYLIST+set}" ]]; then printf '%d' "${#PLAYLIST[@]}"; else printf '0'; fi
 }
 
+# 菜单行距: 空间不足时单行排列, 避免菜单项被裁切
+tui_menu_step() {
+    local start="$1" end="$2" total="${3:-${#TUI_MENU_ITEMS[@]}}"
+    if (( (end - start + 1) >= total * 2 - 1 )); then
+        printf '2'
+    else
+        printf '1'
+    fi
+}
+
 # 当前屏幕可移动条目数
 tui_item_count() {
     case "${UI_SCREEN:-menu}" in
@@ -311,9 +321,11 @@ tui_render_menu() {
     local start_row="$1" end_row="$2" cols
     cols=$(tui_cols)
     local total=${#TUI_MENU_ITEMS[@]}
+    local step
+    step=$(tui_menu_step "$start_row" "$end_row" "$total")
     local i
     for ((i = 0; i < total; i++)); do
-        local row=$((start_row + i * 2))
+        local row=$((start_row + i * step))
         (( row > end_row )) && break
         tui_blank_row "$row"
         tui_goto "$row" 4
@@ -1018,7 +1030,7 @@ tui_render_playlist_select() {
         local pname pcount
         IFS='|' read -r pname _ pcount _ _ <<< "$pline"
         label="$(printf '%2d' "$idx")  ${pname}  (${pcount}首)"
-        label="$(tui_trunc "$label" $((list_w - 2)))"
+        label="$(tui_trunc "$label" $((list_w - 6)))"
         tui_goto "$row" 2
         if [[ "$idx" == "$sel" ]]; then
             printf '%s=> %s%s%s' "${T_BOLD}${T_FG_RED}" "${T_BOLD}${T_FG_RED}" "$label" "${T_RESET}"
@@ -1115,10 +1127,12 @@ tui_register_regions() {
             ;;
         menu|*)
             local total=${#TUI_MENU_ITEMS[@]}
-            local i
+            local i step
+            step=$(tui_menu_step "$main_start" "$main_end" "$total")
             for ((i = 0; i < total; i++)); do
-                local row=$((main_start + i * 2))
-                input_register_region "menu_$i" "$row" 1 2 "$cols"
+                local row=$((main_start + i * step))
+                (( row > main_end )) && break
+                input_register_region "menu_$i" "$row" 1 1 "$cols"
             done
             ;;
     esac
