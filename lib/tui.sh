@@ -730,10 +730,11 @@ tui_splash_loading() {
         pad=$(( (cols - 26) / 2 ))
         [[ $pad -lt 0 ]] && pad=0
         printf '%s[2K%s[%d;1H' "${_T_ESC}" "${_T_ESC}" 1
-        printf '%*s%s LX-Music-Shell 加载中...\n' "$pad" '' "${frames[$((i % 4))]}"
+        printf '%*s%s LX-Music-Shell 加载中...' "$pad" '' "${frames[$((i % 4))]}"
         sleep 0.06
     done
-    printf '%s[2K%s[1;1H' "${_T_ESC}" "${_T_ESC}"
+    # 清空开屏动画所在行, 避免退出 TUI 后残留在普通屏幕上
+    printf '%s[2K%s[1;1H%s[2K' "${_T_ESC}" "${_T_ESC}" "${_T_ESC}"
 }
 
 #==============================================================================
@@ -760,6 +761,11 @@ TUI_LAST_COLS=0
 
 tui_on_resize() {
     TUI_NEED_CLEAR=1
+    # shellcheck disable=SC2034  # TUI_DIRTY 由 lx-music-shell 主循环消费
+    TUI_DIRTY=1
+    # 清掉缓存的终端尺寸, 下次渲染重新 tput 获取, 保证实时适应窗口大小
+    COLUMNS=""
+    LINES=""
 }
 
 tui_render() {
