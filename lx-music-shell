@@ -15,7 +15,7 @@
 #==============================================================================
 
 # 版本信息
-VERSION="3.3.0"
+VERSION="3.4.0"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
@@ -848,10 +848,23 @@ do_play() {
         track="${PLAYLIST[index]}"
     fi
 
+    # 原始源解析失败时, 自动测试其他可用源并按同名歌曲解析 (无感回退)
+    if [[ -z "$url" ]] || [[ "$url" != http* ]]; then
+        local auto_res
+        auto_res="$(_auto_resolve_url "$name" "$artist" "$src")"
+        if [[ -n "$auto_res" ]]; then
+            IFS='|' read -r src quality url <<< "$auto_res"
+            if [[ "$url" == http* ]]; then
+                PLAYLIST[index]="$name|$artist|$album|$duration|$song_id|$quality|$cover|$quals|$url|$src"
+                track="${PLAYLIST[index]}"
+            fi
+        fi
+    fi
+
     if [[ -z "$url" ]] || [[ "$url" != http* ]]; then
         [[ "$silent" != "--no-message" ]] && {
             echo -e "\033[33m提示: 该歌曲无可用播放链接\033[0m"
-            echo "网易云版权曲目匿名受限; 可在 ~/.config/lx-music-shell/config 设置 LX_API_URL 使用聚合 API 解析。"
+            echo "已自动测试所有可用源; 仍无法解析时可检查网络或 LX_API_URL 配置。"
         }
         PLAYER_STATUS="stopped"
         return 1
@@ -1316,6 +1329,123 @@ run_search_core() {
     search_append_source "$query" "$source" "$limit"
 }
 
+# 同步搜索单个源, 输出 6 列结果 (无结果则不输出)
+_search_one_source_sync() {
+    local src="$1" query="$2" limit="${3:-5}"
+    if declare -F "${src}_search" >/dev/null 2>&1; then
+        "${src}_search" "$query" "$limit" 2>/dev/null
+    elif [[ -n "${SOURCE_URLS[$src]:-}" ]]; then
+        search_custom_source "$query" "$src" "$limit" 2>/dev/null
+    fi
+}
+
+# 后台搜索单个源并写入临时文件
+_search_one_source_to_file() {
+    local src="$1" query="$2" limit="$3" out="$4" results
+    results="$(_search_one_source_sync "$src" "$query" "$limit" 2>/dev/null)"
+    [[ -n "$results" ]] && printf '%s\n' "$results" > "$out"
+}
+
+# 自动匹配搜索: 并行测试所有可用源 (内置 + yinyuan/自定义), 无感聚合结果
+do_search_auto() {
+    local query="$1" limit="${2:-$SEARCH_LIMIT}"
+    [[ -z "$query" ]] && return 1
+
+    local -a candidates srcs pids files
+    local src name tmpd out i
+    for src in netease kugou kuwo qq migu; do
+        source_is_available "$src" && candidates+=("$src")
+    done
+    for name in $(printf '%s\n' "${!SOURCE_URLS[@]}" | sort); do
+        case "$name" in
+            netease|kugou|kuwo|qq|migu|ximalaya) continue ;;
+        esac
+        source_is_available "$name" && candidates+=("$name")
+    done
+    [[ ${#candidates[@]} -eq 0 ]] && return 1
+
+    tmpd=$(mktemp -d "${TMPDIR:-/tmp}/lxms-search.XXXXXX") || return 1
+    i=0
+    for src in "${candidates[@]}"; do
+        out="$tmpd/$i.out"
+        _search_one_source_to_file "$src" "$query" "$limit" "$out" &
+        srcs+=("$src"); pids+=("$!"); files+=("$out")
+        i=$((i + 1))
+    done
+
+    # 最多等待 12 秒, 未完成的源自动放弃 (无感)
+    local deadline=$((SECONDS + 12)) alive pid
+    while :; do
+        alive=0
+        for pid in "${pids[@]}"; do
+            if kill -0 "$pid" 2>/dev/null; then alive=1; break; fi
+        done
+        [[ $alive -eq 0 ]] && break
+        (( SECONDS >= deadline )) && break
+        sleep 0.1
+    done
+    for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || true; done
+    wait 2>/dev/null || true
+
+    PLAYLIST=(); LXMS_PLAYLIST=(); PLAYLIST_INDEX=0
+    UI_SELECTED=0; UI_SCROLL_TOP=0
+    local n=0 idx=0 line
+    for src in "${srcs[@]}"; do
+        local file="${files[idx]}"
+        idx=$((idx + 1))
+        [[ -s "$file" ]] || continue
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            [[ $n -ge $limit ]] && break 2
+            add_search_result "$line" "$src"
+            ((n++))
+        done < "$file"
+    done
+    rm -rf "$tmpd"
+
+    CURRENT_SOURCE="auto"
+    CURRENT_SOURCE_NAME="自动匹配"
+    echo -e "\033[32m✓ 自动匹配 ${n} 首 (测试 ${#srcs[@]} 个源, 无感切换可用源)\033[0m"
+    return 0
+}
+
+# 播放失败时自动尝试其他源解析 (无感回退)
+_auto_resolve_url() {
+    local name="$1" artist="$2" original_src="$3"
+    local -a candidates
+    local src
+    for src in netease kugou kuwo qq migu; do
+        [[ "$src" == "$original_src" ]] && continue
+        source_is_available "$src" && candidates+=("$src")
+    done
+    for src in $(printf '%s\n' "${!SOURCE_URLS[@]}" | sort); do
+        case "$src" in
+            netease|kugou|kuwo|qq|migu|ximalaya) continue ;;
+        esac
+        [[ "$src" == "$original_src" ]] && continue
+        source_is_available "$src" && candidates+=("$src")
+    done
+
+    local c line n sid2 qr q u
+    for c in "${candidates[@]}"; do
+        declare -F "${c}_search" >/dev/null 2>&1 || continue
+        local results
+        results="$(_search_one_source_sync "$c" "$name $artist" 5 2>/dev/null)"
+        [[ -z "$results" ]] && continue
+        while IFS= read -r line; do
+            IFS='|' read -r n _ _ _ sid2 _ <<< "$line"
+            [[ -z "$sid2" || "$sid2" == "null" ]] && continue
+            qr=$(source_base_get_play_url "$c" "$sid2" "${DEFAULT_QUALITY:-flac}" 2>/dev/null) || continue
+            q="${qr%%:*}"
+            u="${qr#*:}"
+            [[ "$u" == http* ]] || continue
+            printf '%s|%s|%s' "$c" "$q" "$u"
+            return 0
+        done <<< "$results"
+    done
+    return 1
+}
+
 do_search() {
     local query="$1"
     local source="$DEFAULT_SOURCE"
@@ -1324,6 +1454,12 @@ do_search() {
     if [[ -z "$query" ]]; then
         echo -e "\033[31m错误: 请输入搜索关键词\033[0m"
         return 1
+    fi
+
+    # 未显式指定源时, 自动测试并聚合所有可用源 (含 yinyuan 内嵌源)
+    if [[ -z "$2" ]]; then
+        do_search_auto "$query" "$limit"
+        return $?
     fi
 
     # 第二参数是内置源名或已配置的自定义源名 -> 指定源; 数字 -> limit
@@ -2182,7 +2318,6 @@ tui_op_select() {
             UI_SCREEN="search"; UI_FOCUS="list"; UI_SELECTED=0; UI_SCROLL_TOP=0
             ;;
         playlist) UI_SCREEN="search"; UI_FOCUS="list"; UI_QUERY=""; UI_SELECTED=0; UI_SCROLL_TOP=0 ;;
-        source)   tui_op_open_source_select ;;
         quality)  tui_op_open_quality_select ;;
         mode)     tui_cycle_mode; save_config ;;
         help)     UI_SCREEN="help" ;;
@@ -2350,7 +2485,6 @@ interactive_mode_tui() {
                     n)   do_next ;;
                     p)   do_prev ;;
                     m)   tui_cycle_mode ;;
-                    s)   tui_cycle_source ;;
                     c)   tui_cycle_quality ;;
                     +|=) tui_volume_up ;;
                     -)   tui_volume_down ;;

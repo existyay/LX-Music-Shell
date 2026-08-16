@@ -77,11 +77,11 @@ assert_contains "截断加省略号" "$out" "…"
 echo -e "${YELLOW}=== 测试 3: 菜单 ===${NC}"
 #==============================================================================
 
-assert_eq "菜单项数量=9" "9" "${#TUI_MENU_ITEMS[@]}"
+assert_eq "菜单项数量=8" "8" "${#TUI_MENU_ITEMS[@]}"
 assert_eq "首项 action" "search" "$(printf '%s' "${TUI_MENU_ITEMS[0]#*|}")"
-assert_eq "末项 action" "quit" "$(printf '%s' "${TUI_MENU_ITEMS[8]#*|}")"
+assert_eq "末项 action" "quit" "$(printf '%s' "${TUI_MENU_ITEMS[7]#*|}")"
 
-UI_SELECTED=5
+UI_SELECTED=4
 assert_eq "选中项 action" "quality" "$(tui_menu_selected_action)"
 
 #==============================================================================
@@ -126,7 +126,7 @@ UI_SCREEN=menu; UI_SELECTED=1
 tui_op_move_up; assert_eq "menu move_up 1->0" "0" "$UI_SELECTED"
 tui_op_move_up; assert_eq "menu move_up clamp 0" "0" "$UI_SELECTED"
 tui_op_move_down; assert_eq "menu move_down 0->1" "1" "$UI_SELECTED"
-tui_op_move_bottom; assert_eq "menu move_bottom ->8" "8" "$UI_SELECTED"
+tui_op_move_bottom; assert_eq "menu move_bottom ->7" "7" "$UI_SELECTED"
 
 UI_SCREEN=search
 PLAYLIST=("a|1|2|3|4|5|6|7|8" "b|1|2|3|4|5|6|7|8" "c|1|2|3|4|5|6|7|8")

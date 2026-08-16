@@ -75,7 +75,6 @@ TUI_MENU_ITEMS=(
     "搜索歌单|playlist_search"
     "今日推荐|recommend"
     "播放列表|playlist"
-    "切换音源|source"
     "切换音质|quality"
     "播放模式|mode"
     "帮助|help"
