@@ -307,6 +307,7 @@ tui_render_menu() {
         tui_blank_row "$row"
         tui_goto "$row" 4
         local label="${TUI_MENU_ITEMS[i]%%|*}"
+        label="$(tui_trunc "$label" $((cols - 12)))"
         if [[ "$i" == "${UI_SELECTED:-0}" ]]; then
             printf '%s=> %s%s%s' "${T_BOLD}${T_FG_RED}" "${T_BOLD}${T_FG_RED}" "$label" "${T_RESET}"
         else
@@ -332,7 +333,9 @@ tui_render_search_input() {
     if ((focused)); then
         prompt="${T_BG_BLUE}${T_FG_WHITE}"
         printf '%s' "${T_FG_CYAN}${T_BOLD}▸${T_RESET} "
-        printf '%s%s%s' "$prompt" "${UI_QUERY:-}" "${T_RESET}"
+        local q
+        q="$(tui_trunc "${UI_QUERY:-}" $((cols - 24)))"
+        printf '%s%s%s' "$prompt" "$q" "${T_RESET}"
         printf '%s|%s' "${T_FG_CYAN}${T_BOLD}" "${T_RESET}"
     else
         if [[ -z "${UI_QUERY:-}" ]]; then
@@ -342,7 +345,7 @@ tui_render_search_input() {
                 printf '%s(输入关键词后回车搜索, / 聚焦)%s' "${T_DIM}${T_FG_GRAY}" "${T_RESET}"
             fi
         else
-            printf '%s%s%s' "${T_FG_WHITE}" "${UI_QUERY}" "${T_RESET}"
+            printf '%s%s%s' "${T_FG_WHITE}" "$(tui_trunc "${UI_QUERY}" $((cols - 24)))" "${T_RESET}"
         fi
     fi
 
@@ -786,7 +789,10 @@ tui_render_frame() {
         playing)
             tui_render_playing "$main_start" "$main_end"
             ;;
-        source_select|quality_select|playlist_select)
+        playlist_select)
+            tui_render_playlist_select "$main_start" "$main_end"
+            ;;
+        source_select|quality_select)
             tui_render_select "$main_start" "$main_end"
             ;;
         menu|*)
@@ -867,6 +873,7 @@ tui_render_select() {
         tui_blank_row "$row"
         tui_goto "$row" 4
         label="${TUI_SELECT_ITEMS[idx]}"
+        label="$(tui_trunc "$label" $((cols - 10)))"
         if [[ "$idx" == "$sel" ]]; then
             printf '%s=> %s%s%s' "${T_BOLD}${T_FG_RED}" "${T_BOLD}${T_FG_RED}" "$label" "${T_RESET}"
         else
@@ -950,6 +957,103 @@ tui_render_playing() {
     pad=$(tui_left_pad "$line" "$cols")
     tui_goto $((info_row + 2)) 1
     printf '%*s%s%s%s' "$pad" '' "${T_DIM}${T_FG_GRAY}" "$line" "${T_RESET}"
+}
+
+#==============================================================================
+# 渲染: 歌单搜索结果 (左侧列表 + 右侧预览)
+#==============================================================================
+tui_render_playlist_select() {
+    local start_row="$1" end_row="$2" cols
+    cols=$(tui_cols)
+    tui_blank_area "$start_row" "$end_row"
+
+    local n=${#PLAYLIST_SEARCH_RESULTS[@]}
+    local visible=$((end_row - start_row + 1))
+    (( visible < 1 )) && visible=1
+    local sel="${UI_SELECTED:-0}"
+    if ((sel < UI_SCROLL_TOP)); then UI_SCROLL_TOP=$sel; fi
+    if ((sel >= UI_SCROLL_TOP + visible)); then UI_SCROLL_TOP=$((sel - visible + 1)); fi
+    (( UI_SCROLL_TOP < 0 )) && UI_SCROLL_TOP=0
+
+    local list_w=$((cols * 58 / 100))
+    (( list_w < 20 )) && list_w=20
+    (( list_w > cols - 30 )) && list_w=$((cols - 30))
+
+    if ((n == 0)); then
+        tui_goto "$start_row" 4
+        printf '%s(无歌单结果)%s' "${T_DIM}${T_FG_GRAY}" "${T_RESET}"
+        return
+    fi
+
+    local i idx row label
+    for ((i = 0; i < visible; i++)); do
+        idx=$((UI_SCROLL_TOP + i))
+        (( idx >= n )) && break
+        row=$((start_row + i))
+        tui_blank_row "$row"
+        local pline="${PLAYLIST_SEARCH_RESULTS[idx]}"
+        local pname pcount
+        IFS='|' read -r pname _ pcount _ _ <<< "$pline"
+        label="$(printf '%2d' "$idx")  ${pname}  (${pcount}首)"
+        label="$(tui_trunc "$label" $((list_w - 2)))"
+        tui_goto "$row" 2
+        if [[ "$idx" == "$sel" ]]; then
+            printf '%s=> %s%s%s' "${T_BOLD}${T_FG_RED}" "${T_BOLD}${T_FG_RED}" "$label" "${T_RESET}"
+        else
+            printf '   %s%s%s' "${T_FG_WHITE}" "$label" "${T_RESET}"
+        fi
+    done
+    local ri
+    for ((ri = i; ri < visible; ri++)); do
+        tui_blank_row $((start_row + ri))
+    done
+
+    # 右侧预览
+    local pcol=$((list_w + 4))
+    local pw=$((cols - pcol - 2))
+    (( pw < 14 )) && pw=14
+    local sline="${PLAYLIST_SEARCH_RESULTS[sel]}"
+    local sname scount splay scover
+    IFS='|' read -r sname _ scount splay scover <<< "$sline"
+    local box_h=7
+    local top="$start_row"
+    tui_goto "$top" "$pcol"
+    printf '┌%s┐' "$(printf '─%.0s' $(seq 1 $((pw - 2))))"
+    local b
+    for ((b = 1; b < box_h - 1; b++)); do
+        tui_goto $((top + b)) "$pcol"
+        printf '│%*s│' $((pw - 2)) ''
+    done
+    tui_goto $((top + box_h - 1)) "$pcol"
+    printf '└%s┘' "$(printf '─%.0s' $(seq 1 $((pw - 2))))"
+
+    local cover_text="♫ 歌单封面"
+    local tw
+    tw=$(tui_width "$cover_text")
+    (( tw > pw - 4 )) && cover_text="$(tui_trunc "$cover_text" $((pw - 4)))"
+    local pad=$(( (pw - 2 - tw) / 2 ))
+    tui_goto $((top + 3)) $((pcol + 1))
+    printf '%*s%s%*s' "$pad" '' "$cover_text" $((pw - 2 - tw - pad)) ''
+
+    local info_row=$((top + box_h))
+    local iline
+    iline="名称: ${sname}"
+    iline="$(tui_trunc "$iline" "$pw")"
+    tui_goto "$info_row" "$pcol"
+    printf '%s%s%s' "${T_BOLD}${T_FG_WHITE}" "$iline" "${T_RESET}"
+
+    iline="歌曲: ${scount}首"
+    tui_goto $((info_row + 1)) "$pcol"
+    printf '%s%s%s' "${T_DIM}${T_FG_GRAY}" "$iline" "${T_RESET}"
+
+    iline="播放: ${splay}"
+    tui_goto $((info_row + 2)) "$pcol"
+    printf '%s%s%s' "${T_DIM}${T_FG_GRAY}" "$iline" "${T_RESET}"
+
+    iline="封面: ${scover:0:32}..."
+    iline="$(tui_trunc "$iline" "$pw")"
+    tui_goto $((info_row + 3)) "$pcol"
+    printf '%s%s%s' "${T_DIM}${T_FG_GRAY}" "$iline" "${T_RESET}"
 }
 
 #==============================================================================
