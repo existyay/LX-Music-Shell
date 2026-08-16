@@ -18,6 +18,10 @@ Thumbs.db
 .config/lx-music-shell/sources.list
 .cache/lx-music-shell/
 
+# 音源目录 (yinyuan) - 用户自定义音源, 混淆加密存储, 不上传到 GitHub
+yinyuan/
+~/.config/lx-music-shell/yinyuan/
+
 # Test output
 *.log
 

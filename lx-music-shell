@@ -15,7 +15,7 @@
 #==============================================================================
 
 # 版本信息
-VERSION="3.0.2"
+VERSION="3.1.0"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
@@ -134,6 +134,11 @@ load_modules() {
             source "$lib_path/tui.sh"
             LXMS_UI_TUI_AVAILABLE=1
         fi
+        # v3.1 音源管理 (yinyuan, 混淆加密存储)
+        if [[ -f "$lib_path/yinyuan.sh" ]]; then
+            # shellcheck disable=SC1091
+            source "$lib_path/yinyuan.sh"
+        fi
     fi
 
     # 加载音乐源 (v2.0)
@@ -227,6 +232,16 @@ load_sources() {
             SOURCE_URLS["$lower_key"]="$url"
         fi
     done
+
+    # 加载 yinyuan 目录中混淆加密的自定义音源 (解混淆后注入内存, 不落盘明文)
+    if declare -F yinyuan_list >/dev/null 2>&1; then
+        local yn yurl
+        while IFS= read -r yn; do
+            [[ -z "$yn" ]] && continue
+            yurl=$(yinyuan_get_url "$yn" 2>/dev/null)
+            [[ -n "$yurl" ]] && SOURCE_URLS["$yn"]="$yurl"
+        done < <(yinyuan_list)
+    fi
 }
 
 show_sources() {
@@ -255,12 +270,12 @@ add_source() {
     local url="$2"
 
     if [[ -z "$name" ]] || [[ -z "$url" ]]; then
-        echo -e "\033[31m错误: 用法 /source add <名称> <URL>\033[0m"
+        echo -e "\033[31m错误: 用法 /source add <名称> <URL 或 GitHub链接>\033[0m"
         return 1
     fi
 
-    if [[ "$name" =~ [^a-z0-9_] ]]; then
-        echo -e "\033[31m错误: 源名称只能包含小写字母、数字和下划线\033[0m"
+    if [[ "$name" =~ [^a-z0-9_-] ]]; then
+        echo -e "\033[31m错误: 源名称只能包含小写字母、数字、下划线和中划线\033[0m"
         return 1
     fi
 
@@ -270,16 +285,34 @@ add_source() {
         return 1
     fi
 
-    local varname="SOURCE_${name^^}"
-    if grep -qE "^${varname}=" "$SOURCES_FILE" 2>/dev/null; then
-        echo -e "\033[33m警告: 源 '$name' 已存在，已更新 URL\033[0m"
-        sed -i "s|^${varname}=.*|${varname}=\"$url\"|" "$SOURCES_FILE"
+    # 若为 GitHub 链接, 自动拉取配置 (内容 = 搜索 URL 模板或 JSON)
+    if declare -F yinyuan_is_github_url >/dev/null 2>&1 && yinyuan_is_github_url "$url"; then
+        echo -e "\033[36m检测到 GitHub 链接, 拉取音源配置...\033[0m"
+        local fetched
+        fetched=$(yinyuan_fetch_github "$url" 2>/dev/null)
+        if [[ -z "$fetched" ]] || [[ "$fetched" != http* ]]; then
+            echo -e "\033[31m错误: 无法从该 GitHub 链接解析出有效搜索 URL\033[0m"
+            return 1
+        fi
+        url="$fetched"
+        echo -e "\033[2m  解析到搜索 URL 模板\033[0m"
+    fi
+
+    # 混淆加密存储到 yinyuan 目录 (不落盘明文 URL)
+    if declare -F yinyuan_add >/dev/null 2>&1; then
+        yinyuan_add "$name" "$url" || { echo -e "\033[31m错误: 音源加密存储失败\033[0m"; return 1; }
     else
-        echo "${varname}=\"$url\"" >> "$SOURCES_FILE"
+        # 兜底: 无 yinyuan 模块时写回旧式 sources.list
+        local varname="SOURCE_${name^^}"
+        [[ -f "$SOURCES_FILE" ]] || : > "$SOURCES_FILE"
+        if grep -qE "^${varname}=" "$SOURCES_FILE" 2>/dev/null; then
+            sed -i "s|^${varname}=.*|${varname}=\"$url\"|" "$SOURCES_FILE"
+        else
+            echo "${varname}=\"$url\"" >> "$SOURCES_FILE"
+        fi
     fi
     SOURCE_URLS["$name"]="$url"
-    eval "${varname}=\"$url\""
-    echo -e "\033[32m✓ 已添加源: $name\033[0m"
+    echo -e "\033[32m✓ 已添加音源: $name (加密存储于 yinyuan/)\033[0m"
 }
 
 remove_source() {
@@ -290,15 +323,27 @@ remove_source() {
         return 1
     fi
 
+    # 从 yinyuan 目录移除
+    local removed=0
+    if declare -F yinyuan_exists >/dev/null 2>&1 && yinyuan_exists "$name"; then
+        yinyuan_remove "$name"
+        removed=1
+    fi
+
+    # 兼容旧式 sources.list
     local varname="SOURCE_${name^^}"
-    if ! grep -qE "^${varname}=" "$SOURCES_FILE" 2>/dev/null; then
+    if grep -qE "^${varname}=" "$SOURCES_FILE" 2>/dev/null; then
+        sed -i "/^${varname}=.*/d" "$SOURCES_FILE"
+        removed=1
+    fi
+
+    if [[ $removed -eq 0 ]]; then
         echo -e "\033[33m警告: 源 '$name' 不存在\033[0m"
         return 1
     fi
 
-    sed -i "/^${varname}=.*/d" "$SOURCES_FILE"
     unset "SOURCE_URLS[$name]"
-    unset "${varname}"
+    unset "${varname}" 2>/dev/null || true
     echo -e "\033[32m✓ 已删除源: $name\033[0m"
 }
 
@@ -408,12 +453,16 @@ set_source() {
     case "$action" in
         list)
             show_sources
+            show_yinyuan_sources
             ;;
         add)
             add_source "$@"
             ;;
         remove|rm|del)
             remove_source "$1"
+            ;;
+        select)
+            yinyuan_select
             ;;
         *)
             local normalized="${action,,}"
@@ -425,6 +474,70 @@ set_source() {
             fi
             ;;
     esac
+}
+
+# 显示 yinyuan 内置精选源 (选择式加入入口)
+show_yinyuan_sources() {
+    if ! declare -f yinyuan_curated >/dev/null 2>&1; then
+        return 0
+    fi
+    echo ""
+    echo "----------------------------------------"
+    echo "  内置精选音源 (选择式加入: /source select)"
+    echo "----------------------------------------"
+    while IFS='|' read -r yn_name yn_desc _; do
+        [[ -z "$yn_name" ]] && continue
+        local mark="  "
+        yinyuan_exists "$yn_name" 2>/dev/null && mark="✓ "
+        printf '  %s%-12s %s\n' "$mark" "$yn_name" "$yn_desc"
+    done < <(yinyuan_curated)
+    echo "  自定义音源: /source add <名称> <URL或GitHub链接>"
+}
+
+# 选择式添加音源 (交互)
+yinyuan_select() {
+    if ! declare -f yinyuan_curated >/dev/null 2>&1; then
+        echo -e "\033[31m错误: 音源管理模块未加载\033[0m"
+        return 1
+    fi
+
+    echo ""
+    echo "可选音源 (输入序号或名称):"
+    local -a names=() descs=()
+    local i=1 name desc
+    while IFS='|' read -r name desc _; do
+        [[ -z "$name" ]] && continue
+        names+=("$name")
+        descs+=("$desc")
+        printf '  %d. %-10s %s\n' "$i" "$name" "$desc"
+        ((i++))
+    done < <(yinyuan_curated)
+
+    echo -n "选择: "
+    read -r choice
+    local sel_idx=-1
+    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#names[@]} )); then
+        sel_idx=$((choice - 1))
+    else
+        local j
+        for ((j = 0; j < ${#names[@]}; j++)); do
+            [[ "${names[j]}" == "$choice" ]] && { sel_idx=$j; break; }
+        done
+    fi
+
+    if [[ $sel_idx -lt 0 ]]; then
+        echo -e "\033[31m无效选择\033[0m"
+        return 1
+    fi
+
+    local sel_name="${names[sel_idx]}"
+    echo -n "输入 $sel_name 的搜索 URL 或 GitHub raw 链接 (回车跳过): "
+    read -r url
+    if [[ -z "$url" ]]; then
+        echo -e "\033[33m已跳过 (内置源如 netease 已直连, 无需自定义)\033[0m"
+        return 0
+    fi
+    add_source "$sel_name" "$url"
 }
 
 #==============================================================================

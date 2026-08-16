@@ -22,6 +22,24 @@
 
 ---
 
+## [3.1.0] - 2026-08-16
+
+### 新增 (Minor)
+
+#### 音源管理 (yinyuan)
+- 新增 `lib/yinyuan.sh`: 用户自定义音源自动添加 + 管理
+- 音源存储在 `~/.config/lx-music-shell/yinyuan/` 目录, **混淆加密** (XOR + base64),
+  不落盘明文 URL (规避版权/敏感 URL 风险)
+- 三种添加方式:
+  1. 直接输入搜索 URL (`/source add <name> <url>`)
+  2. 输入 **GitHub 链接** 自动拉取配置 (`/source add <name> <raw-url>`,
+     支持纯文本 URL 或 `{"search_url":"..."}` JSON)
+  3. **选择式** (`/source select`): 内置精选源列表, 选中后输入 URL/链接
+- `yinyuan/` 已列入 `.gitignore`, 不上传到 GitHub
+- 启动时自动从 yinyuan 解混淆加载音源到内存 (不落盘明文)
+
+---
+
 ## [3.0.2] - 2026-08-16
 
 ### 修复 (Patch)

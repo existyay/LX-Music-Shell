@@ -6,7 +6,7 @@
 set -e
 
 # shellcheck disable=SC2034  # 版本变量,供未来更新检查使用
-VERSION="3.0.2"
+VERSION="3.1.0"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="${HOME}/.config/lx-music-shell"
 MAN_DIR="/usr/local/share/man/man1"

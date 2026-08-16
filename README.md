@@ -201,23 +201,37 @@ rm -rf ~/Music/LX-Music-Shell
 
 - 主配置: `~/.config/lx-music-shell/config`
 - 源配置: `~/.config/lx-music-shell/sources.list`
+- 音源目录 (混淆加密): `~/.config/lx-music-shell/yinyuan/`
 - 缓存: `~/.cache/lx-music-shell/`
 - 数据: `~/.local/share/lx-music-shell/`
 - 下载音乐: `~/Music/LX-Music-Shell/`
 
-## 自定义音乐源
+## 音源管理 (yinyuan)
 
-编辑 `~/.config/lx-music-shell/sources.list`:
+音源支持三种添加方式，统一存储在 `yinyuan/` 目录（已 gitignore，不上传 GitHub），
+内容做**混淆加密**（XOR + base64），不落盘明文 URL。
 
 ```bash
-# 示例：添加自定义源
-SOURCE_CUSTOM="https://api.example.com/search"
+# 1) 直接输入搜索 URL (自动混淆加密存储)
+/source add myapi "https://api.example.com/search?kw={{query}}&n={{limit}}"
+
+# 2) 输入 GitHub 链接 (自动拉取音源配置, 支持纯文本或 JSON)
+/source add myapi "https://raw.githubusercontent.com/user/repo/main/myapi.json"
+
+# 3) 选择式加入 (内置精选源列表, 选中后输入 URL/链接)
+/source select
+
+# 列出内置精选源 + 已配置音源
+/source list
+
+# 移除音源
+/source remove myapi
 ```
 
-或使用内置命令导入:
-```bash
-/import-source /path/to/sources.list
-```
+URL 模板支持 `{{query}}`（搜索关键词）和 `{{limit}}`（结果数量）占位符。
+GitHub 配置内容为纯文本搜索 URL，或 `{"search_url":"..."}` 格式的 JSON。
+
+
 
 ## 播放器后端
 

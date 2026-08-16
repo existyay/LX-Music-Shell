@@ -74,8 +74,8 @@ run_fetch_source_api() {
 }
 
 run_set_source() {
-  set_source add custom "https://example.com/search?q={{query}}&limit={{limit}}"
-  assert_eq "https://example.com/search?q={{query}}&limit={{limit}}" "${SOURCE_CUSTOM}" "custom source loaded"
+  set_source add custom "https://example.com/search?q={{query}}&limit={{limit}}" >/dev/null 2>&1
+  assert_eq "https://example.com/search?q={{query}}&limit={{limit}}" "${SOURCE_URLS[custom]}" "custom source loaded into SOURCE_URLS"
   local output
   output=$(show_sources)
   assert_contains "custom" "$output" "show_sources should list custom source"
