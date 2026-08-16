@@ -113,19 +113,23 @@ player_start() {
             )
             [[ -n "$title" ]] && args+=(--force-media-title="$title")
             args+=("$url")
-            "$backend" "${args[@]}" &
+            # nohup + stdio 重定向 + disown: 退出 UI 后播放器可继续后台运行
+            nohup "$backend" "${args[@]}" </dev/null >/dev/null 2>&1 &
             PLAYER_PID=$!
+            disown "$PLAYER_PID" 2>/dev/null || true
             ;;
         ffplay)
             # 非 mpv 后端: 无 IPC, 退化为传统控制 (进度用墙钟)
             PLAYER_SOCKET=""
-            "$backend" -nodisp -volume "$PLAYER_VOLUME" -autoexit "$url" &
+            nohup "$backend" -nodisp -volume "$PLAYER_VOLUME" -autoexit "$url" </dev/null >/dev/null 2>&1 &
             PLAYER_PID=$!
+            disown "$PLAYER_PID" 2>/dev/null || true
             ;;
         mplayer)
             PLAYER_SOCKET=""
-            "$backend" -novideo -volume "$PLAYER_VOLUME" -quiet "$url" &
+            nohup "$backend" -novideo -volume "$PLAYER_VOLUME" -quiet "$url" </dev/null >/dev/null 2>&1 &
             PLAYER_PID=$!
+            disown "$PLAYER_PID" 2>/dev/null || true
             ;;
         *)
             return 1

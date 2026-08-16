@@ -15,17 +15,29 @@
 #==============================================================================
 
 # 版本信息
-VERSION="3.1.2"
+VERSION="3.2.0"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
-    # 优先走统一清理 (含后台网络监控/状态栏), 避免退出后残留后台任务写终端
-    if declare -f cleanup_player >/dev/null 2>&1; then
-        cleanup_player >/dev/null 2>&1 || true
-    elif declare -f player_stop >/dev/null 2>&1; then
-        player_stop >/dev/null 2>&1 || true
-    elif declare -f do_stop >/dev/null 2>&1; then
-        do_stop >/dev/null 2>&1 || true
+    if [[ "${LXMS_PLAYER_HANDLED:-0}" != "1" ]]; then
+        # 后台播放模式: 有音乐播放时保留 mpv 继续运行, 只清理看护/状态栏任务
+        if [[ "${BACKGROUND_PLAY:-true}" == "true" ]] && declare -f player_is_running >/dev/null 2>&1 && player_is_running; then
+            if declare -f save_player_background_state >/dev/null 2>&1; then
+                save_player_background_state >/dev/null 2>&1 || true
+            fi
+            if declare -f stop_watchdog >/dev/null 2>&1; then stop_watchdog; fi
+            if declare -f stop_status_bar >/dev/null 2>&1; then stop_status_bar; fi
+            disown "$PLAYER_PID" 2>/dev/null || true
+        else
+            # 优先走统一清理 (含后台网络监控/状态栏), 避免退出后残留后台任务写终端
+            if declare -f cleanup_player >/dev/null 2>&1; then
+                cleanup_player >/dev/null 2>&1 || true
+            elif declare -f player_stop >/dev/null 2>&1; then
+                player_stop >/dev/null 2>&1 || true
+            elif declare -f do_stop >/dev/null 2>&1; then
+                do_stop >/dev/null 2>&1 || true
+            fi
+        fi
     fi
     # 恢复终端状态 (TUI 模式可能改动了)
     if [[ "${LXMS_TUI_ACTIVE:-0}" == "1" ]]; then
@@ -200,6 +212,7 @@ load_config() {
     LX_API_URL="${LX_API_URL:-https://lxmusicapi.onrender.com}"
     LX_API_KEY="${LX_API_KEY:-share-v3}"
     LX_API_TIMEOUT="${LX_API_TIMEOUT:-15}"
+    BACKGROUND_PLAY="${BACKGROUND_PLAY:-true}"
 }
 
 save_config() {
@@ -241,6 +254,9 @@ AUTO_RECONNECT="${AUTO_RECONNECT:-true}"
 NETWORK_CHECK_INTERVAL="${NETWORK_CHECK_INTERVAL:-3}"
 MAX_RECONNECT_ATTEMPTS="${MAX_RECONNECT_ATTEMPTS:-5}"
 RECONNECT_DELAY="${RECONNECT_DELAY:-2}"
+
+# 后台播放 (退出 UI 后继续播放)
+BACKGROUND_PLAY="${BACKGROUND_PLAY:-true}"
 
 # LX-Music 聚合 API (用于解析 5 大音源真实 URL)
 LX_API_URL="${LX_API_URL:-https://lxmusicapi.onrender.com}"
@@ -888,6 +904,7 @@ do_stop() {
     player_stop
     stop_watchdog
     stop_status_bar
+    rm -f "${CACHE_DIR}/player-state" 2>/dev/null || true
     [[ "${LXMS_TUI_ACTIVE:-0}" != "1" ]] && echo -e "\033[31m⏹ 已停止\033[0m"
 }
 
@@ -1046,6 +1063,56 @@ cleanup_player() {
     elif [[ -n "$PLAYER_PID" ]]; then
         kill -9 "$PLAYER_PID" 2>/dev/null || true
         PLAYER_PID=""
+    fi
+    rm -f "${CACHE_DIR}/player-state" 2>/dev/null || true
+}
+
+# 保存后台播放状态, 供下次启动时恢复控制
+save_player_background_state() {
+    if declare -f player_is_running >/dev/null 2>&1 && player_is_running; then
+        mkdir -p "$CACHE_DIR"
+        cat > "${CACHE_DIR}/player-state" <<EOF
+PLAYER_PID="${PLAYER_PID}"
+PLAYER_SOCKET="${PLAYER_SOCKET}"
+PLAYER_STATUS="${PLAYER_STATUS:-playing}"
+PLAYER_VOLUME="${PLAYER_VOLUME:-80}"
+CURRENT_TRACK="${CURRENT_TRACK}"
+PLAY_MODE="${PLAY_MODE:-list}"
+VOLUME="${VOLUME:-80}"
+EOF
+        return 0
+    fi
+    rm -f "${CACHE_DIR}/player-state" 2>/dev/null || true
+    return 1
+}
+
+# 启动时检测并接管上次退到后台的播放器
+player_adopt_background() {
+    local state_file="${CACHE_DIR}/player-state"
+    [[ -f "$state_file" ]] || return 0
+    # shellcheck disable=SC1090
+    source "$state_file" 2>/dev/null || { rm -f "$state_file"; return 0; }
+
+    if [[ -n "${PLAYER_SOCKET:-}" ]] && [[ -S "${PLAYER_SOCKET:-}" ]]; then
+        PLAYER_PID="${PLAYER_PID:-}"
+        PLAYER_STATUS="${PLAYER_STATUS:-playing}"
+        PLAYER_EOF=0
+        PLAYER_VOLUME="${PLAYER_VOLUME:-${VOLUME:-80}}"
+        CURRENT_TRACK="${CURRENT_TRACK:-}"
+        # 确认 socket 可用; 若播放器已死则清理状态
+        if declare -F player_poll >/dev/null 2>&1; then
+            player_poll >/dev/null 2>&1 || {
+                rm -f "$state_file"
+                PLAYER_PID=""
+                PLAYER_SOCKET=""
+                PLAYER_STATUS="stopped"
+            }
+        fi
+    else
+        rm -f "$state_file"
+        PLAYER_PID=""
+        PLAYER_SOCKET=""
+        PLAYER_STATUS="stopped"
     fi
 }
 
@@ -1733,7 +1800,14 @@ interactive_mode() {
                 echo "  音量: $VOLUME%"
                 ;;
             /quit|/q|exit)
-                do_stop
+                if [[ "${BACKGROUND_PLAY:-true}" == "true" ]]; then
+                    save_player_background_state
+                    stop_watchdog
+                    stop_status_bar
+                else
+                    do_stop
+                fi
+                LXMS_PLAYER_HANDLED=1
                 echo "再见！"
                 break
                 ;;
@@ -1765,6 +1839,18 @@ command_mode() {
             ;;
         quality|--quality)
             set_quality "$@"
+            ;;
+        stop|--stop)
+            do_stop
+            ;;
+        pause|--pause)
+            do_pause
+            ;;
+        resume|--resume)
+            do_resume
+            ;;
+        status|--status)
+            show_status
             ;;
         update-sources|--update-sources)
             fetch_source_api
@@ -2044,20 +2130,41 @@ interactive_mode_tui() {
     trap 'tui_on_resize' WINCH
 
     local running=1 ev_type ev_data ev_x ev_y
+    local snap_status="" snap_pos="" snap_dur="" snap_track="" snap_mode="" snap_vol="" snap_net="" snap_src="" snap_qual=""
+    TUI_DIRTY=1
     while [[ $running -eq 1 ]] && [[ "${UI_QUIT:-0}" != "1" ]]; do
         # 同步播放器真实状态 + 曲目结束自动下一首
         player_poll >/dev/null 2>&1 || true
         if [[ "${PLAYER_EOF:-0}" == "1" ]]; then
             PLAYER_EOF=0
             handle_playback_end
+            TUI_DIRTY=1
         fi
 
-        tui_render
+        # 状态/进度变化才触发重绘, 避免无变化时每帧全屏重绘造成闪屏
+        if [[ "${PLAYER_STATUS}" != "$snap_status" || "${PLAYBACK_POSITION:-0}" != "$snap_pos" || "${PLAYBACK_DURATION:-0}" != "$snap_dur" || "${CURRENT_TRACK}" != "$snap_track" || "${PLAY_MODE}" != "$snap_mode" || "${VOLUME}" != "$snap_vol" || "${NETWORK_STATUS}" != "$snap_net" || "${CURRENT_SOURCE_NAME}" != "$snap_src" || "${DEFAULT_QUALITY}" != "$snap_qual" ]]; then
+            TUI_DIRTY=1
+        fi
 
-        if ! input_read_event 0.15; then
+        if [[ "${TUI_DIRTY:-1}" == "1" ]]; then
+            tui_render
+            snap_status="${PLAYER_STATUS}"
+            snap_pos="${PLAYBACK_POSITION:-0}"
+            snap_dur="${PLAYBACK_DURATION:-0}"
+            snap_track="${CURRENT_TRACK}"
+            snap_mode="${PLAY_MODE}"
+            snap_vol="${VOLUME}"
+            snap_net="${NETWORK_STATUS}"
+            snap_src="${CURRENT_SOURCE_NAME}"
+            snap_qual="${DEFAULT_QUALITY}"
+            TUI_DIRTY=0
+        fi
+
+        if ! input_read_event 0.2; then
             if [[ ! -t 0 ]]; then break; fi
             continue
         fi
+        TUI_DIRTY=1
         ev_type="${EVENT_TYPE:-0}"
         ev_data="${EVENT_DATA:-}"
         ev_x="${EVENT_DATA_X:-0}"
@@ -2115,12 +2222,19 @@ interactive_mode_tui() {
 
     if supports_mouse; then input_disable_mouse; fi
     trap - WINCH 2>/dev/null || true
-    do_stop
+    if [[ "${BACKGROUND_PLAY:-true}" == "true" ]]; then
+        save_player_background_state
+        stop_watchdog
+        stop_status_bar
+    else
+        do_stop
+    fi
+    LXMS_PLAYER_HANDLED=1
     tui_cleanup
     LXMS_TUI_ACTIVE=0
-    printf '\n'
+    printf '
+'
 }
-
 # 命令行入口 (v2.0)
 #==============================================================================
 main() {
@@ -2133,6 +2247,9 @@ main() {
     # 初始化当前源显示名 (避免 TUI/状态栏显示内部英文 id, 如 netease)
     CURRENT_SOURCE="${DEFAULT_SOURCE}"
     CURRENT_SOURCE_NAME="$(source_display_name)"
+
+    # 检测并接管上次退到后台的播放器
+    player_adopt_background
 
     # 应用源框架配置 (音质等)
     if [[ "${LXMS_SOURCES_AVAILABLE:-0}" == "1" ]]; then

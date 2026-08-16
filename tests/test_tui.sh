@@ -211,7 +211,9 @@ clean=$(strip_ansi "$out")
 assert_contains "搜索渲染含搜索框" "$clean" "搜索"
 assert_contains "搜索渲染含音质 chip" "$clean" "FLAC"
 assert_contains "搜索渲染含播放栏" "$clean" "🔊80%"
-assert_contains "搜索渲染含进度时间" "$clean" "01:35/03:42"
+assert_contains "搜索渲染含当前时间" "$clean" "01:35"
+assert_contains "搜索渲染含总时长" "$clean" "03:42"
+assert_contains "搜索渲染含百分比" "$clean" "%"
 
 render_quality_select() {
     UI_SCREEN="quality_select"
