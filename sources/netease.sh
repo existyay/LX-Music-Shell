@@ -172,6 +172,130 @@ if songs:
 }
 
 #==============================================================================
+# 搜索歌单 (真实)
+#
+# 用法: netease_search_playlists query limit
+# 输出: name|id|trackCount|playCount|cover
+#==============================================================================
+netease_search_playlists() {
+    local query="$1"
+    local limit="${2:-20}"
+    [[ -z "$query" ]] && return 1
+
+    local encoded resp
+    encoded=$(netease_url_encode "$query")
+    resp=$(curl -sS --connect-timeout 8 --max-time 15         -H "User-Agent: ${NETEASE_UA}"         -H "Referer: ${NETEASE_API}/"         "${NETEASE_API}/api/search/get/web?csrf_token=&type=1000&s=${encoded}&offset=0&total=true&limit=${limit}" 2>/dev/null)
+
+    [[ -z "$resp" ]] && return 1
+    [[ "$resp" != *'"playlists"'* ]] && return 1
+
+    printf '%s' "$resp" | python3 -c '
+import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for pl in (d.get("result", {}).get("playlists") or []):
+    name = pl.get("name") or "未知歌单"
+    pid = str(pl.get("id", ""))
+    count = str(pl.get("trackCount", 0))
+    play = str(pl.get("playCount", 0))
+    cover = pl.get("coverImgUrl", "") or ""
+    print("|".join([name, pid, count, play, cover]))
+' 2>/dev/null | head -n "$limit"
+}
+
+#==============================================================================
+# 获取歌单内歌曲 (真实)
+#
+# 用法: netease_get_playlist_tracks playlist_id limit
+# 输出: name|artist|album|duration|song_id|cover
+#==============================================================================
+netease_get_playlist_tracks() {
+    local playlist_id="$1"
+    local limit="${2:-50}"
+    [[ -z "$playlist_id" ]] && return 1
+
+    local resp
+    resp=$(curl -sS --connect-timeout 8 --max-time 20         -H "User-Agent: ${NETEASE_UA}"         -H "Referer: ${NETEASE_API}/"         "${NETEASE_API}/api/v6/playlist/detail?id=${playlist_id}&n=${limit}" 2>/dev/null)
+
+    [[ -z "$resp" ]] && return 1
+    [[ "$resp" != *'"tracks"'* ]] && return 1
+
+    printf '%s' "$resp" | python3 -c '
+import sys, json
+def fmt_dur(ms):
+    try:
+        s = int(ms) // 1000
+    except Exception:
+        return "00:00"
+    return "%02d:%02d" % (s // 60, s % 60)
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+tracks = (d.get("playlist") or {}).get("tracks") or []
+for t in tracks:
+    name = t.get("name") or "未知"
+    artists = t.get("ar") or t.get("artists") or []
+    artist = artists[0].get("name", "未知歌手") if artists else "未知歌手"
+    album = (t.get("al") or {}).get("name", "") or ""
+    dur = fmt_dur(t.get("dt", 0))
+    sid = str(t.get("id", ""))
+    cover = (t.get("al") or {}).get("picUrl", "") or ""
+    if cover and "?" in cover:
+        cover = cover.split("?")[0] + "?param=300y300"
+    elif cover:
+        cover = cover + "?param=300y300"
+    print("|".join([name, artist, album, dur, sid, cover]))
+' 2>/dev/null | head -n "$limit"
+}
+
+#==============================================================================
+# 今日推荐 (真实, 匿名可用)
+#
+# 用法: netease_recommend_songs limit
+# 输出: name|artist|album|duration|song_id|cover
+#==============================================================================
+netease_recommend_songs() {
+    local limit="${1:-20}"
+
+    local resp
+    resp=$(curl -sS --connect-timeout 8 --max-time 15         -H "User-Agent: ${NETEASE_UA}"         -H "Referer: ${NETEASE_API}/"         "${NETEASE_API}/api/personalized/newsong?limit=${limit}" 2>/dev/null)
+
+    [[ -z "$resp" ]] && return 1
+    [[ "$resp" != *'"result"'* ]] && return 1
+
+    printf '%s' "$resp" | python3 -c '
+import sys, json
+def fmt_dur(ms):
+    try:
+        s = int(ms) // 1000
+    except Exception:
+        return "00:00"
+    return "%02d:%02d" % (s // 60, s % 60)
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for item in (d.get("result") or []):
+    song = item.get("song") or item
+    name = song.get("name") or "未知"
+    artists = song.get("artists") or song.get("ar") or []
+    artist = artists[0].get("name", "未知歌手") if artists else "未知歌手"
+    album = (song.get("album") or song.get("al") or {}).get("name", "") or ""
+    dur = fmt_dur(song.get("duration", song.get("dt", 0)))
+    sid = str(song.get("id", ""))
+    cover = (song.get("album") or song.get("al") or {}).get("picUrl", "") or item.get("picUrl", "") or ""
+    if cover and "?" in cover:
+        cover = cover.split("?")[0] + "?param=300y300"
+    elif cover:
+        cover = cover + "?param=300y300"
+    print("|".join([name, artist, album, dur, sid, cover]))
+' 2>/dev/null | head -n "$limit"
+}
+
+#==============================================================================
 # 获取歌词 (真实)
 #
 # 用法: netease_get_lyrics song_id

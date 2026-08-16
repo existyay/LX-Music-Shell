@@ -72,6 +72,8 @@ UI_HELP_PAGE="${UI_HELP_PAGE:-0}"
 #==============================================================================
 TUI_MENU_ITEMS=(
     "搜索音乐|search"
+    "搜索歌单|playlist_search"
+    "今日推荐|recommend"
     "播放列表|playlist"
     "切换音源|source"
     "切换音质|quality"
@@ -147,7 +149,7 @@ tui_list_n() {
 tui_item_count() {
     case "${UI_SCREEN:-menu}" in
         search)         tui_list_n ;;
-        source_select|quality_select) printf '%d' "${#TUI_SELECT_ITEMS[@]}" ;;
+        source_select|quality_select|playlist_select) printf '%d' "${#TUI_SELECT_ITEMS[@]}" ;;
         *)              printf '%d' "${#TUI_MENU_ITEMS[@]}" ;;
     esac
 }
@@ -333,7 +335,11 @@ tui_render_search_input() {
         printf '%s|%s' "${T_FG_CYAN}${T_BOLD}" "${T_RESET}"
     else
         if [[ -z "${UI_QUERY:-}" ]]; then
-            printf '%s(输入关键词后回车搜索, / 聚焦)%s' "${T_DIM}${T_FG_GRAY}" "${T_RESET}"
+            if [[ "${UI_SEARCH_MODE:-song}" == "playlist" ]]; then
+                printf '%s(输入歌单关键词后回车搜索, / 聚焦)%s' "${T_DIM}${T_FG_GRAY}" "${T_RESET}"
+            else
+                printf '%s(输入关键词后回车搜索, / 聚焦)%s' "${T_DIM}${T_FG_GRAY}" "${T_RESET}"
+            fi
         else
             printf '%s%s%s' "${T_FG_WHITE}" "${UI_QUERY}" "${T_RESET}"
         fi
@@ -553,10 +559,17 @@ tui_render_hint() {
     case "${UI_SCREEN:-menu}" in
         search)
             if [[ "${UI_FOCUS:-list}" == "search" ]]; then
-                hint="输入关键词, [Enter]搜索  [Esc]返回菜单"
+                if [[ "${UI_SEARCH_MODE:-song}" == "playlist" ]]; then
+                    hint="输入歌单关键词, [Enter]搜索  [Esc]返回菜单"
+                else
+                    hint="输入关键词, [Enter]搜索  [Esc]返回菜单"
+                fi
             else
                 hint="[/]搜索  [↑↓/jk]选择  [Enter]播放  [Space]暂停  [n]下一首  [p]上一首  [+/-]音量  [Esc]菜单  [q]退出"
             fi
+            ;;
+        playlist_select)
+            hint="[↑↓/jk]选择歌单  [Enter]加载歌曲  [Esc]返回菜单  [q]退出"
             ;;
         source_select|quality_select)
             hint="[↑↓/jk]选择  [Enter]确认  [Esc]返回菜单  [q]退出"
@@ -710,39 +723,53 @@ tui_on_resize() {
 }
 
 tui_render() {
-    local cols lines
+    local cols lines frame do_full_clear
     cols=$(tui_cols)
     lines=$(tui_lines)
-    # 缓存尺寸, 本次渲染内的 tui_cols/tui_lines 不再重复调用 tput
+    # 缓存尺寸, 本帧渲染内的 tui_cols/tui_lines 不再重复调用 tput
     COLUMNS="$cols"
     LINES="$lines"
 
-    local screen_changed=0
+    # 屏幕切换/尺寸变化/收到 resize 信号时才整屏清除
     if [[ "${UI_SCREEN:-menu}" != "${TUI_LAST_SCREEN:-}" || "$lines" != "${TUI_LAST_LINES:-0}" || "$cols" != "${TUI_LAST_COLS:-0}" ]]; then
-        screen_changed=1
+        do_full_clear=1
     fi
-
-    if [[ "${TUI_NEED_CLEAR:-0}" == "1" || "$screen_changed" == "1" ]]; then
-        printf '%s' "${T_CLR}"
+    if [[ "${TUI_NEED_CLEAR:-0}" == "1" ]]; then
+        do_full_clear=1
         TUI_NEED_CLEAR=0
-    else
-        printf '%s' "${T_HOME}"
     fi
 
     TUI_LAST_SCREEN="${UI_SCREEN:-menu}"
     TUI_LAST_LINES="$lines"
     TUI_LAST_COLS="$cols"
+    TUI_FULL_CLEAR=$do_full_clear
 
     # 布局: 顶部 2 行 + 底部常驻区
-    tui_render_topline
-    tui_render_subtitle 2
-
-    # 底部: 歌词(5) + 提示(1) + 播放栏(1) + 进度(1)
-    # (实时频谱动画已移除, 仅保留开屏加载动画)
     local bottom=$((5 + 1 + 1 + 1))
     local main_start=4
     local main_end=$((lines - bottom))
     (( main_end < main_start + 3 )) && main_end=$((main_start + 3))
+
+    # 鼠标区域必须在主 shell 注册 (命令替换子 shell 会丢失数组修改)
+    tui_register_regions "$main_start" "$main_end"
+
+    # 双缓冲: 在子 shell 中生成整帧, 一次性输出, 消除逐行清屏闪烁
+    frame="$(tui_render_frame "$main_start" "$main_end" "$lines")"
+    printf '%s' "$frame"
+    TUI_FULL_CLEAR=0
+}
+
+tui_render_frame() {
+    local main_start="$1" main_end="$2" lines="$3"
+
+    if [[ "${TUI_FULL_CLEAR:-0}" == "1" ]]; then
+        printf '%s' "${T_CLR}"
+    else
+        printf '%s' "${T_HOME}"
+    fi
+
+    tui_render_topline
+    tui_render_subtitle 2
 
     case "${UI_SCREEN:-menu}" in
         search)
@@ -752,7 +779,7 @@ tui_render() {
         help)
             tui_render_help "$main_start" "$main_end"
             ;;
-        source_select|quality_select)
+        source_select|quality_select|playlist_select)
             tui_render_select "$main_start" "$main_end"
             ;;
         menu|*)
@@ -767,11 +794,7 @@ tui_render() {
     tui_render_hint "$hint_row"
     tui_render_playbar $((lines - 1))
     tui_render_progress "$lines"
-
-    # 注册鼠标可点击区域
-    tui_register_regions "$main_start" "$main_end"
 }
-
 #==============================================================================
 # 帮助页
 #==============================================================================
@@ -876,7 +899,7 @@ tui_register_regions() {
                 input_register_region "list_$i" $((main_start + 1 + i)) 1 1 "$cols"
             done
             ;;
-        source_select|quality_select)
+        source_select|quality_select|playlist_select)
             local visible=$((main_end - main_start))
             local i
             for ((i = 0; i < visible; i++)); do
@@ -984,6 +1007,16 @@ tui_op_start_search() {
     UI_SCREEN="search"
     UI_FOCUS="search"
     UI_QUERY=""
+    UI_SEARCH_MODE="song"
+    UI_SELECTED=0
+    UI_SCROLL_TOP=0
+}
+
+tui_op_start_playlist_search() {
+    UI_SCREEN="search"
+    UI_FOCUS="search"
+    UI_QUERY=""
+    UI_SEARCH_MODE="playlist"
     UI_SELECTED=0
     UI_SCROLL_TOP=0
 }
@@ -1006,6 +1039,7 @@ tui_op_search_cancel() {
         UI_SCREEN="menu"
         UI_FOCUS="list"
         UI_QUERY=""
+        UI_SEARCH_MODE="song"
         UI_SELECTED=0
         UI_SCROLL_TOP=0
     fi

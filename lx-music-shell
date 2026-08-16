@@ -15,7 +15,7 @@
 #==============================================================================
 
 # 版本信息
-VERSION="3.2.1"
+VERSION="3.3.0"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
@@ -1368,6 +1368,100 @@ do_search() {
 }
 
 #==============================================================================
+# 歌单 / 今日推荐 (netease 真实实现)
+#==============================================================================
+
+# 搜索歌单: 结果写入 PLAYLIST_SEARCH_RESULTS 与 TUI 选择子菜单
+do_search_playlists() {
+    local query="$1"
+    if [[ -z "$query" ]]; then
+        echo -e "\033[31m错误: 请输入歌单关键词\033[0m" >&2
+        return 1
+    fi
+
+    local results
+    results=$(netease_search_playlists "$query" "$SEARCH_LIMIT" 2>/dev/null)
+    if [[ -z "$results" ]]; then
+        echo -e "\033[33m未找到歌单: $query\033[0m" >&2
+        return 1
+    fi
+
+    PLAYLIST_SEARCH_RESULTS=()
+    TUI_SELECT_ITEMS=()
+    TUI_SELECT_VALUES=()
+    TUI_SELECT_TITLE="选择歌单"
+    local line name pid count _play _cover
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        PLAYLIST_SEARCH_RESULTS+=("$line")
+        IFS='|' read -r name pid count _play _cover <<< "$line"
+        TUI_SELECT_ITEMS+=("${name}  (${count}首)")
+        TUI_SELECT_VALUES+=("$pid")
+    done <<< "$results"
+
+    echo -e "\033[32m✓ 找到 ${#PLAYLIST_SEARCH_RESULTS[@]} 个歌单\033[0m"
+    local i=0
+    for line in "${PLAYLIST_SEARCH_RESULTS[@]}"; do
+        IFS='|' read -r name pid count play _cover <<< "$line"
+        printf '  %2d. %-24s | %s首 | 播放%s\n' "$i" "$name" "$count" "$play"
+        ((i++))
+    done
+    return 0
+}
+
+# 加载歌单内歌曲到播放列表
+do_load_playlist_tracks() {
+    local playlist_id="$1"
+    if [[ -z "$playlist_id" ]]; then
+        echo -e "\033[31m错误: 用法 /load-playlist <歌单ID>\033[0m" >&2
+        return 1
+    fi
+
+    local results
+    results=$(netease_get_playlist_tracks "$playlist_id" "$SEARCH_LIMIT" 2>/dev/null)
+    if [[ -z "$results" ]]; then
+        echo -e "\033[31m错误: 无法加载歌单 $playlist_id (可能为私有/失效歌单)\033[0m" >&2
+        return 1
+    fi
+
+    PLAYLIST=(); LXMS_PLAYLIST=(); PLAYLIST_INDEX=0
+    UI_SELECTED=0; UI_SCROLL_TOP=0
+    local line n=0
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        add_search_result "$line" "netease"
+        ((n++))
+    done <<< "$results"
+    CURRENT_SOURCE="netease"
+    CURRENT_SOURCE_NAME="网易云音乐"
+    echo -e "\033[32m✓ 已加载 ${n} 首歌曲到播放列表\033[0m"
+    return 0
+}
+
+# 今日推荐歌曲 (netease 匿名可用的新歌推荐)
+do_recommend_songs() {
+    local results
+    results=$(netease_recommend_songs "$SEARCH_LIMIT" 2>/dev/null)
+    if [[ -z "$results" ]]; then
+        echo -e "\033[31m错误: 暂时无法获取今日推荐\033[0m" >&2
+        return 1
+    fi
+
+    PLAYLIST=(); LXMS_PLAYLIST=(); PLAYLIST_INDEX=0
+    UI_SELECTED=0; UI_SCROLL_TOP=0
+    local line n=0
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        add_search_result "$line" "netease"
+        ((n++))
+    done <<< "$results"
+    CURRENT_SOURCE="netease"
+    CURRENT_SOURCE_NAME="网易云音乐"
+    echo -e "\033[32m✓ 今日推荐已加载 ${n} 首歌曲\033[0m"
+    return 0
+}
+
+#==============================================================================
 # 源连通性测试
 #==============================================================================
 test_source_connectivity() {
@@ -1753,6 +1847,17 @@ interactive_mode() {
             /quality)
                 set_quality "${rest_args[@]:-}"
                 ;;
+            /playlist)
+                do_search_playlists "${rest_args[@]:-}"
+                ;;
+            /load-playlist)
+                do_load_playlist_tracks "${rest_args[@]:-}"
+                show_playlist
+                ;;
+            /recommend)
+                do_recommend_songs
+                show_playlist
+                ;;
             /volume|/v)
                 set_volume "${rest_args[@]:-}"
                 ;;
@@ -1775,7 +1880,12 @@ interactive_mode() {
                 show_panel
                 ;;
             /statusbar)
-                render_status_bar
+                if [[ -n "$STATUS_BAR_PID" ]] && kill -0 "$STATUS_BAR_PID" 2>/dev/null; then
+                    stop_status_bar
+                else
+                    start_status_bar
+                    echo -e "\033[36m实时状态栏已启动 (再次 /statusbar 关闭, /stop 停止播放并关闭)\033[0m"
+                fi
                 ;;
             /network)
                 echo "检查网络状态..."
@@ -1839,6 +1949,13 @@ command_mode() {
             ;;
         quality|--quality)
             set_quality "$@"
+            ;;
+        playlist|--playlist)
+            do_search_playlists "$@"
+            ;;
+        recommend|--recommend)
+            do_recommend_songs
+            show_playlist
             ;;
         stop|--stop)
             do_stop
@@ -2020,7 +2137,13 @@ tui_volume_down() {
 
 tui_confirm_search() {
     if [[ -n "${UI_QUERY:-}" ]]; then
-        do_search "$UI_QUERY" >/dev/null 2>&1
+        if [[ "${UI_SEARCH_MODE:-song}" == "playlist" ]]; then
+            do_search_playlists "$UI_QUERY" >/dev/null 2>&1
+            UI_SCREEN="playlist_select"
+        else
+            do_search "$UI_QUERY" >/dev/null 2>&1
+            UI_SCREEN="search"
+        fi
     fi
     UI_FOCUS="list"
     UI_SELECTED=0
@@ -2033,6 +2156,11 @@ tui_op_select() {
         if [[ ${#PLAYLIST[@]} -gt 0 ]]; then
             do_play "$UI_SELECTED" --no-message
         fi
+        return
+    fi
+    if [[ "${UI_SCREEN:-menu}" == "playlist_select" ]]; then
+        do_load_playlist_tracks "${TUI_SELECT_VALUES[$UI_SELECTED]:-}" >/dev/null 2>&1
+        UI_SCREEN="search"; UI_FOCUS="list"; UI_SELECTED=0; UI_SCROLL_TOP=0
         return
     fi
     if [[ "${UI_SCREEN:-menu}" == "source_select" ]]; then
@@ -2048,6 +2176,11 @@ tui_op_select() {
     action=$(tui_menu_selected_action)
     case "$action" in
         search)   tui_op_start_search ;;
+        playlist_search) tui_op_start_playlist_search ;;
+        recommend)
+            do_recommend_songs >/dev/null 2>&1
+            UI_SCREEN="search"; UI_FOCUS="list"; UI_SELECTED=0; UI_SCROLL_TOP=0
+            ;;
         playlist) UI_SCREEN="search"; UI_FOCUS="list"; UI_QUERY=""; UI_SELECTED=0; UI_SCROLL_TOP=0 ;;
         source)   tui_op_open_source_select ;;
         quality)  tui_op_open_quality_select ;;
@@ -2122,6 +2255,7 @@ interactive_mode_tui() {
     # shellcheck disable=SC2034  # TUI 滚动状态供 tui.sh 读取
     UI_SCROLL_TOP=0
     UI_FOCUS="list"
+    UI_SEARCH_MODE="song"
 
     if supports_mouse; then input_enable_mouse; fi
     tui_splash_loading
