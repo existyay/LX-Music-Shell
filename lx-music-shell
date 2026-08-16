@@ -15,7 +15,7 @@
 #==============================================================================
 
 # 版本信息
-VERSION="3.4.0"
+VERSION="3.5.0"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
@@ -2291,6 +2291,8 @@ tui_op_select() {
     if [[ "${UI_SCREEN:-menu}" == "search" ]]; then
         if [[ ${#PLAYLIST[@]} -gt 0 ]]; then
             do_play "$UI_SELECTED" --no-message
+            UI_SCREEN="playing"
+            UI_FOCUS="list"
         fi
         return
     fi
@@ -2318,6 +2320,7 @@ tui_op_select() {
             UI_SCREEN="search"; UI_FOCUS="list"; UI_SELECTED=0; UI_SCROLL_TOP=0
             ;;
         playlist) UI_SCREEN="search"; UI_FOCUS="list"; UI_QUERY=""; UI_SELECTED=0; UI_SCROLL_TOP=0 ;;
+        playing)  UI_SCREEN="playing"; UI_FOCUS="list" ;;
         quality)  tui_op_open_quality_select ;;
         mode)     tui_cycle_mode; save_config ;;
         help)     UI_SCREEN="help" ;;
@@ -2482,6 +2485,7 @@ interactive_mode_tui() {
                     k)   tui_op_move_up ;;
                     g)   tui_op_move_top ;;
                     G)   tui_op_move_bottom ;;
+                    i)   UI_SCREEN="playing"; UI_FOCUS="list" ;;
                     n)   do_next ;;
                     p)   do_prev ;;
                     m)   tui_cycle_mode ;;

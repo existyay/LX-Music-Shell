@@ -77,11 +77,11 @@ assert_contains "截断加省略号" "$out" "…"
 echo -e "${YELLOW}=== 测试 3: 菜单 ===${NC}"
 #==============================================================================
 
-assert_eq "菜单项数量=8" "8" "${#TUI_MENU_ITEMS[@]}"
+assert_eq "菜单项数量=9" "9" "${#TUI_MENU_ITEMS[@]}"
 assert_eq "首项 action" "search" "$(printf '%s' "${TUI_MENU_ITEMS[0]#*|}")"
-assert_eq "末项 action" "quit" "$(printf '%s' "${TUI_MENU_ITEMS[7]#*|}")"
+assert_eq "末项 action" "quit" "$(printf '%s' "${TUI_MENU_ITEMS[8]#*|}")"
 
-UI_SELECTED=4
+UI_SELECTED=5
 assert_eq "选中项 action" "quality" "$(tui_menu_selected_action)"
 
 #==============================================================================
@@ -126,7 +126,7 @@ UI_SCREEN=menu; UI_SELECTED=1
 tui_op_move_up; assert_eq "menu move_up 1->0" "0" "$UI_SELECTED"
 tui_op_move_up; assert_eq "menu move_up clamp 0" "0" "$UI_SELECTED"
 tui_op_move_down; assert_eq "menu move_down 0->1" "1" "$UI_SELECTED"
-tui_op_move_bottom; assert_eq "menu move_bottom ->7" "7" "$UI_SELECTED"
+tui_op_move_bottom; assert_eq "menu move_bottom ->8" "8" "$UI_SELECTED"
 
 UI_SCREEN=search
 PLAYLIST=("a|1|2|3|4|5|6|7|8" "b|1|2|3|4|5|6|7|8" "c|1|2|3|4|5|6|7|8")
@@ -227,6 +227,26 @@ out=$(render_quality_select)
 clean=$(strip_ansi "$out")
 assert_contains "音质选择渲染含标题" "$clean" "选择音质"
 assert_contains "音质选择渲染含 FLAC" "$clean" "FLAC (无损)"
+
+render_playing() {
+    UI_SCREEN="playing"
+    UI_FOCUS="list"
+    PLAYER_STATUS="playing"
+    CURRENT_SOURCE_NAME="网易云音乐"
+    DEFAULT_QUALITY="flac"
+    PLAY_MODE="list"
+    VOLUME=80
+    PLAYLIST_INDEX=0
+    PLAYLIST=("晴天|周杰伦|叶惠美|04:29|186016|flac|http://c.jpg|flac|http://u|netease")
+    CURRENT_TRACK="晴天 - 周杰伦"
+    tui_render_playing 4 19 2>/dev/null
+}
+out=$(render_playing)
+clean=$(strip_ansi "$out")
+assert_contains "播放页含歌曲名" "$clean" "晴天"
+assert_contains "播放页含专辑" "$clean" "叶惠美"
+assert_contains "播放页含来源" "$clean" "网易云音乐"
+assert_contains "播放页含作曲占位" "$clean" "作曲"
 
 #==============================================================================
 # 结果

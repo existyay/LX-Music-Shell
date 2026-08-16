@@ -75,6 +75,7 @@ TUI_MENU_ITEMS=(
     "搜索歌单|playlist_search"
     "今日推荐|recommend"
     "播放列表|playlist"
+    "正在播放|playing"
     "切换音质|quality"
     "播放模式|mode"
     "帮助|help"
@@ -149,6 +150,7 @@ tui_item_count() {
     case "${UI_SCREEN:-menu}" in
         search)         tui_list_n ;;
         source_select|quality_select|playlist_select) printf '%d' "${#TUI_SELECT_ITEMS[@]}" ;;
+        playing)        printf '0' ;;
         *)              printf '%d' "${#TUI_MENU_ITEMS[@]}" ;;
     esac
 }
@@ -570,6 +572,9 @@ tui_render_hint() {
         playlist_select)
             hint="[↑↓/jk]选择歌单  [Enter]加载歌曲  [Esc]返回菜单  [q]退出"
             ;;
+        playing)
+            hint="[Esc]返回  [Space]暂停/继续  [n]下一首  [p]上一首  [+/-]音量  [q]退出"
+            ;;
         source_select|quality_select)
             hint="[↑↓/jk]选择  [Enter]确认  [Esc]返回菜单  [q]退出"
             ;;
@@ -778,6 +783,9 @@ tui_render_frame() {
         help)
             tui_render_help "$main_start" "$main_end"
             ;;
+        playing)
+            tui_render_playing "$main_start" "$main_end"
+            ;;
         source_select|quality_select|playlist_select)
             tui_render_select "$main_start" "$main_end"
             ;;
@@ -869,6 +877,79 @@ tui_render_select() {
     for ((ri = i; ri < visible; ri++)); do
         tui_blank_row $((start_row + ri))
     done
+}
+
+#==============================================================================
+# 渲染: 正在播放页 (封面 + 歌曲信息)
+#==============================================================================
+tui_render_playing() {
+    local start_row="$1" end_row="$2" cols
+    cols=$(tui_cols)
+    tui_blank_area "$start_row" "$end_row"
+
+    local name="未知" artist="" album="" quality="--" source="" track
+    local n
+    n=$(tui_list_n)
+    if [[ "${PLAYLIST_INDEX:-}" =~ ^[0-9]+$ ]] && ((PLAYLIST_INDEX < n)); then
+        track="${PLAYLIST[PLAYLIST_INDEX]}"
+        IFS='|' read -r name artist album _ _ quality _ _ _ _ <<< "$track"
+    elif [[ -n "${CURRENT_TRACK:-}" ]]; then
+        name="${CURRENT_TRACK%% - *}"
+        artist="${CURRENT_TRACK#* - }"
+        [[ "$artist" == "$CURRENT_TRACK" ]] && artist=""
+    fi
+    [[ -z "$name" ]] && name="未知"
+    [[ -z "$artist" ]] && artist="未知歌手"
+    source="$(tui_source_name)"
+    [[ -z "$source" ]] && source="自动匹配"
+    local qlabel="--"
+    case "$quality" in
+        hires) qlabel="HiRes" ;;
+        flac)  qlabel="FLAC" ;;
+        320)   qlabel="HQ" ;;
+        128)   qlabel="SQ" ;;
+    esac
+
+    # 封面: kitty 图形协议优先; 否则绘制 ASCII 封面盒
+    if [[ -n "${TUI_COVER_FILE:-}" ]] && [[ -f "$TUI_COVER_FILE" ]] &&        [[ "${TERM:-}" == *kitty* || "${TERM:-}" == xterm-kitty* ]]; then
+        tui_render_cover "$start_row" 2 10
+    else
+        local cw=22 ch=7 left=2 top="$start_row" r
+        tui_goto "$top" "$left"
+        printf '┌%s┐' "$(printf '─%.0s' $(seq 1 $((cw - 2))))"
+        for ((r = 1; r < ch - 1; r++)); do
+            tui_goto $((top + r)) "$left"
+            printf '│%*s│' $((cw - 2)) ''
+        done
+        tui_goto $((top + ch - 1)) "$left"
+        printf '└%s┘' "$(printf '─%.0s' $(seq 1 $((cw - 2))))"
+        local title_line="${name}"
+        local tw
+        tw=$(tui_width "$title_line")
+        (( tw > cw - 4 )) && title_line="$(tui_trunc "$title_line" $((cw - 4)))"
+        local pad=$(( (cw - 2 - tw) / 2 ))
+        tui_goto $((top + 3)) $((left + 1))
+        printf '%*s%s%*s' "$pad" '' "$title_line" $((cw - 2 - tw - pad)) ''
+    fi
+
+    # 歌曲信息 (居中)
+    local info_row=$((start_row + 8))
+    local line
+    line="${name} - ${artist}"
+    local pad
+    pad=$(tui_left_pad "$line" "$cols")
+    tui_goto "$info_row" 1
+    printf '%*s%s%s%s' "$pad" '' "${T_BOLD}${T_FG_WHITE}" "$line" "${T_RESET}"
+
+    line="专辑: ${album:-无}    来源: ${source}    音质: ${qlabel}"
+    pad=$(tui_left_pad "$line" "$cols")
+    tui_goto $((info_row + 1)) 1
+    printf '%*s%s%s%s' "$pad" '' "${T_DIM}${T_FG_GRAY}" "$line" "${T_RESET}"
+
+    line="作曲: -    模式: $(tui_mode_name)    音量: ${VOLUME:-80}%"
+    pad=$(tui_left_pad "$line" "$cols")
+    tui_goto $((info_row + 2)) 1
+    printf '%*s%s%s%s' "$pad" '' "${T_DIM}${T_FG_GRAY}" "$line" "${T_RESET}"
 }
 
 #==============================================================================
