@@ -36,9 +36,17 @@ if [[ -z "${LXMS_MPV_IPC:-}" ]]; then
         LXMS_MPV_IPC="$_player_self_dir/mpv_ipc.py"
     fi
 fi
+# MPRIS D-Bus 桥接 (桌面媒体控制, 可选)
+if [[ -z "${LXMS_MPRIS_BRIDGE:-}" ]]; then
+    _player_self_dir="${BASH_SOURCE[0]%/*}"
+    if [[ -f "$_player_self_dir/mpris_bridge.py" ]]; then
+        LXMS_MPRIS_BRIDGE="$_player_self_dir/mpris_bridge.py"
+    fi
+fi
 
 PLAYER_PID=""
 PLAYER_SOCKET=""
+MPRIS_BRIDGE_PID=""
 # shellcheck disable=SC2034  # 播放状态供主脚本/tui 读取
 PLAYBACK_POSITION=0
 PLAYBACK_DURATION=0
@@ -77,6 +85,9 @@ player_wait_ready() {
 player_start() {
     local url="$1"
     local title="${2:-}"
+    local artist="${3:-}"
+    local album="${4:-}"
+    local cover="${5:-}"
     [[ -z "$url" ]] && return 1
 
     # 先停止旧的
@@ -148,6 +159,13 @@ player_start() {
         return 1
     fi
 
+    # 启动 MPRIS 桥接 (桌面环境识别为活动媒体播放器)
+    if [[ "$backend_name" == "mpv" ]] && [[ -n "${LXMS_MPRIS_BRIDGE:-}" ]] && [[ -f "${LXMS_MPRIS_BRIDGE:-}" ]] && [[ -n "$PLAYER_SOCKET" ]]; then
+        python3 "$LXMS_MPRIS_BRIDGE" "$PLAYER_SOCKET" "$title" "$artist" "$album" "$cover" &
+        MPRIS_BRIDGE_PID=$!
+        disown "$MPRIS_BRIDGE_PID" 2>/dev/null || true
+    fi
+
     return 0
 }
 
@@ -155,6 +173,10 @@ player_start() {
 # 控制
 #==============================================================================
 player_stop() {
+    if [[ -n "$MPRIS_BRIDGE_PID" ]]; then
+        kill "$MPRIS_BRIDGE_PID" 2>/dev/null || true
+        MPRIS_BRIDGE_PID=""
+    fi
     if [[ -n "$PLAYER_PID" ]]; then
         player_ipc cmd '["quit"]' >/dev/null 2>&1 || true
         kill "$PLAYER_PID" 2>/dev/null || true

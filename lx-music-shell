@@ -15,7 +15,7 @@
 #==============================================================================
 
 # 版本信息
-VERSION="3.5.0"
+VERSION="3.6.0"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
@@ -873,7 +873,7 @@ do_play() {
     CURRENT_TRACK="$name - $artist"
 
     # 用 mpv IPC 后端启动播放
-    if ! player_start "$url" "$CURRENT_TRACK"; then
+    if ! player_start "$url" "$CURRENT_TRACK" "$artist" "$album" "$cover"; then
         [[ "$silent" != "--no-message" ]] && echo -e "\033[31m错误: 无法启动播放器 (请安装 mpv)\033[0m"
         PLAYER_STATUS="stopped"
         return 1
