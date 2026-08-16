@@ -128,6 +128,13 @@ input_parse_keyboard() {
         return 0
     fi
 
+    # 未识别的 ESC 转义序列不再当作普通字符 (避免鼠标序列被拆坏后污染输入框)
+    if [[ "$seq" == $'\033'* ]]; then
+        EVENT_TYPE=$EVENT_NONE
+        EVENT_DATA=""
+        return 1
+    fi
+
     # 一般字符
     if [[ -n "$seq" ]]; then
         EVENT_TYPE=$EVENT_KEY_CHAR
@@ -285,7 +292,7 @@ input_read_event() {
     # ESC 序列 - 需要继续读取
     if [[ "$first_byte" == $'\033' ]]; then
         local next_byte
-        if ! IFS= read -rsn1 -t 0.01 next_byte 2>/dev/null; then
+        if ! IFS= read -rsn1 -t 0.03 next_byte 2>/dev/null; then
             # 单独的 ESC 键 (first_byte 本身就是 ESC, 传字符串字面量会导致解析失败)
             input_parse_keyboard "$first_byte"
             return 0
@@ -296,7 +303,7 @@ input_read_event() {
             # 尝试读取直到字符或数字结束
             local esc_seq="$first_byte$next_byte"
             local ch
-            while IFS= read -rsn1 -t 0.01 ch 2>/dev/null; do
+            while IFS= read -rsn1 -t 0.03 ch 2>/dev/null; do
                 esc_seq+="$ch"
                 # 终止字符
                 if [[ "$ch" =~ [A-Za-z~] ]]; then
