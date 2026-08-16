@@ -289,6 +289,7 @@ tui_render_subtitle() {
     tui_goto "$row" 1
     tui_clr_line
     sub="♪ $(tui_source_name)   v${VERSION:-3.0}"
+    sub="$(tui_trunc "$sub" "$cols")"
     left=$(tui_left_pad "$sub" "$cols")
     printf '%*s%s%s%s' "$left" '' "${T_DIM}${T_FG_GRAY}" "$sub" "${T_RESET}"
 }
@@ -483,6 +484,7 @@ tui_render_lyrics() {
                 text="(暂无歌词)"
             fi
         fi
+        text="$(tui_trunc "$text" "$cols")"
         local left
         left=$(tui_left_pad "$text" "$cols")
         if ((i == center)); then
@@ -585,6 +587,7 @@ tui_render_hint() {
             hint="[↑↓/jk]选择  [Enter]确认  [/]搜索  [Space]暂停  [q]退出"
             ;;
     esac
+    hint="$(tui_trunc "$hint" "$cols")"
     left=$(tui_left_pad "$hint" "$cols")
     printf '%*s%s%s%s' "$left" '' "${T_DIM}${T_FG_GRAY}" "$hint" "${T_RESET}"
 }
@@ -943,17 +946,20 @@ tui_render_playing() {
     local info_row=$((start_row + 8))
     local line
     line="${name} - ${artist}"
+    line="$(tui_trunc "$line" "$cols")"
     local pad
     pad=$(tui_left_pad "$line" "$cols")
     tui_goto "$info_row" 1
     printf '%*s%s%s%s' "$pad" '' "${T_BOLD}${T_FG_WHITE}" "$line" "${T_RESET}"
 
     line="专辑: ${album:-无}    来源: ${source}    音质: ${qlabel}"
+    line="$(tui_trunc "$line" "$cols")"
     pad=$(tui_left_pad "$line" "$cols")
     tui_goto $((info_row + 1)) 1
     printf '%*s%s%s%s' "$pad" '' "${T_DIM}${T_FG_GRAY}" "$line" "${T_RESET}"
 
     line="作曲: -    模式: $(tui_mode_name)    音量: ${VOLUME:-80}%"
+    line="$(tui_trunc "$line" "$cols")"
     pad=$(tui_left_pad "$line" "$cols")
     tui_goto $((info_row + 2)) 1
     printf '%*s%s%s%s' "$pad" '' "${T_DIM}${T_FG_GRAY}" "$line" "${T_RESET}"

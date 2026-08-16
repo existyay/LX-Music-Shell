@@ -15,7 +15,7 @@
 #==============================================================================
 
 # 版本信息
-VERSION="3.7.0"
+VERSION="3.8.0"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
@@ -768,39 +768,55 @@ source_is_available() {
     return 1
 }
 
-# 后台拉取歌词 (netease 直连优先, 失败回退 LX API)
+# 歌词缓存路径
+lyrics_cache_path() {
+    local song_id="$1" src="${2:-netease}" hash
+    hash=$(printf '%s|%s' "$src" "$song_id" | md5sum 2>/dev/null | cut -d' ' -f1)
+    [[ -z "$hash" ]] && hash=$(printf '%s|%s' "$src" "$song_id" | cksum 2>/dev/null | cut -d' ' -f1)
+    printf '%s/%s.lrc' "${CACHE_DIR}/lyrics" "${hash:-0}"
+}
+
+# 封面缓存路径
+cover_cache_path() {
+    local cover="$1" hash
+    if [[ -z "$cover" || "$cover" == "null" || "$cover" != http* ]]; then
+        return 1
+    fi
+    hash=$(printf '%s' "$cover" | md5sum 2>/dev/null | cut -d' ' -f1)
+    [[ -z "$hash" ]] && hash=$(printf '%s' "$cover" | cksum 2>/dev/null | cut -d' ' -f1)
+    printf '%s/%s.jpg' "${CACHE_DIR}/covers" "${hash:-0}"
+}
+
+# 后台拉取歌词到文件 (netease 直连优先, 失败回退 LX API)
+# 完成时 touch <file>.ready, 主循环检测到 ready 后读取
 fetch_lyrics_async() {
-    local song_id="$1" src="${2:-netease}"
+    local song_id="$1" src="${2:-netease}" out="$3"
+    [[ -z "$song_id" || -z "$out" ]] && return 0
     local lrc=""
     if [[ "$src" == "netease" ]] && declare -F netease_get_lyrics >/dev/null 2>&1; then
         lrc=$(netease_get_lyrics "$song_id" 2>/dev/null)
     fi
-    [[ -z "$lrc" ]] && declare -F lx_api_get_lyric_impl >/dev/null 2>&1 && \
-        lrc=$(lx_api_get_lyric_impl "$src" "$song_id" 2>/dev/null)
-    # shellcheck disable=SC2034  # 歌词供 tui.sh 渲染
-    [[ -n "$lrc" ]] && LXMS_LRC_RAW="$lrc"
+    [[ -z "$lrc" ]] && declare -F lx_api_get_lyric_impl >/dev/null 2>&1 &&         lrc=$(lx_api_get_lyric_impl "$src" "$song_id" 2>/dev/null)
+    if [[ -n "$lrc" ]]; then
+        mkdir -p "$(dirname "$out")"
+        printf '%s' "$lrc" > "$out"
+        touch "$out.ready"
+    fi
 }
 
-# 后台下载封面到本地缓存 (供 kitty 图形协议渲染)
+# 后台下载封面到缓存文件
+# 完成时 touch <file>.ready, 主循环检测到 ready 后设置 TUI_COVER_FILE
 fetch_cover_async() {
-    local cover="$1"
-    if [[ -z "$cover" ]] || [[ "$cover" == "null" ]] || [[ "$cover" != http* ]]; then
-        TUI_COVER_FILE=""
-        return 0
+    local cover="$1" out="$2"
+    [[ -z "$cover" || "$cover" == "null" || "$cover" != http* || -z "$out" ]] && return 0
+    mkdir -p "$(dirname "$out")"
+    if [[ ! -s "$out" ]]; then
+        curl -s --connect-timeout 6 --max-time 15 -o "$out" "$cover" 2>/dev/null || rm -f "$out"
     fi
-    local cover_dir="${CACHE_DIR}/covers"
-    mkdir -p "$cover_dir"
-    local hash f
-    hash=$(printf '%s' "$cover" | md5sum 2>/dev/null | cut -d' ' -f1)
-    [[ -z "$hash" ]] && hash=$(printf '%s' "$cover" | cksum 2>/dev/null | cut -d' ' -f1)
-    f="$cover_dir/${hash}.jpg"
-    if [[ ! -s "$f" ]]; then
-        curl -s --connect-timeout 6 --max-time 15 -o "$f" "$cover" 2>/dev/null || rm -f "$f"
+    if [[ -s "$out" ]]; then
+        touch "$out.ready"
     fi
-    # shellcheck disable=SC2034  # 封面路径供 tui.sh 渲染
-    if [[ -s "$f" ]]; then TUI_COVER_FILE="$f"; else TUI_COVER_FILE=""; fi
 }
-
 do_play() {
     local index="${1:-$PLAYLIST_INDEX}"
     local silent="${2:-}"
@@ -886,9 +902,23 @@ do_play() {
         echo -e "   来源: $(source_display_name "$src")"
     fi
 
-    # 后台拉取歌词 + 封面
-    fetch_lyrics_async "$song_id" "$src" &
-    fetch_cover_async "$cover" &
+    # 后台拉取歌词 + 封面 (子 shell 写文件, 主循环检测 ready)
+    # shellcheck disable=SC2034  # TUI_COVER_FILE/LXMS_LRC_RAW 供 lib/tui.sh 渲染
+    TUI_COVER_FILE=""
+    LXMS_LRC_RAW=""
+    # shellcheck disable=SC2034  # 主循环读取
+    LXMS_PENDING_LYRICS=""
+    LXMS_PENDING_COVER=""
+    local lyrics_file cover_file
+    lyrics_file=$(lyrics_cache_path "$song_id" "$src")
+    if [[ -n "$song_id" ]]; then
+        fetch_lyrics_async "$song_id" "$src" "$lyrics_file" &
+        LXMS_PENDING_LYRICS="$lyrics_file"
+    fi
+    if cover_file=$(cover_cache_path "$cover"); then
+        fetch_cover_async "$cover" "$cover_file" &
+        LXMS_PENDING_COVER="$cover_file"
+    fi
 
     # 启动网络监控 (后台守护)
     start_watchdog
@@ -2415,6 +2445,22 @@ interactive_mode_tui() {
         if [[ "${PLAYER_EOF:-0}" == "1" ]]; then
             PLAYER_EOF=0
             handle_playback_end
+            TUI_DIRTY=1
+        fi
+
+        # 后台歌词/封面拉取完成检测
+        if [[ -n "${LXMS_PENDING_LYRICS:-}" && -f "${LXMS_PENDING_LYRICS}.ready" ]]; then
+            # shellcheck disable=SC2034  # LXMS_LRC_RAW 供 lib/tui.sh 歌词渲染
+            LXMS_LRC_RAW="$(cat "$LXMS_PENDING_LYRICS" 2>/dev/null)"
+            LXMS_PENDING_LYRICS=""
+            TUI_DIRTY=1
+        fi
+        if [[ -n "${LXMS_PENDING_COVER:-}" && -f "${LXMS_PENDING_COVER}.ready" ]]; then
+            if [[ -s "$LXMS_PENDING_COVER" ]]; then
+                # shellcheck disable=SC2034  # TUI_COVER_FILE 供 lib/tui.sh 封面渲染
+                TUI_COVER_FILE="$LXMS_PENDING_COVER"
+            fi
+            LXMS_PENDING_COVER=""
             TUI_DIRTY=1
         fi
 
