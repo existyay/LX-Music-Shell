@@ -15,7 +15,7 @@
 #==============================================================================
 
 # 版本信息
-VERSION="3.10.2"
+VERSION="3.11.0"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
@@ -2429,6 +2429,8 @@ tui_handle_click() {
 }
 
 interactive_mode_tui() {
+    local force_tui="${1:-0}"
+
     if [[ "${LXMS_UI_CAPABILITY_AVAILABLE:-0}" != "1" ]]; then
         interactive_mode
         return
@@ -2436,7 +2438,7 @@ interactive_mode_tui() {
 
     capability_apply_config "$CONFIG_FILE"
     detect_capability
-    if [[ "${LXMS_FORCE_TUI:-0}" != "1" ]]; then
+    if [[ "$force_tui" != "1" && "${LXMS_FORCE_TUI:-0}" != "1" ]]; then
         interactive_mode
         return
     fi
@@ -2648,8 +2650,8 @@ main() {
     done
 
     if [[ $use_tui -eq 1 ]]; then
-        # 显式 --tui
-        interactive_mode_tui
+        # 显式 --tui: 强制 TUI, 窗口较小时也保持 TUI 自适应布局
+        interactive_mode_tui 1
     elif [[ $use_tui -eq 0 ]]; then
         # 显式 --cli
         if [[ ${#args[@]} -eq 0 ]]; then

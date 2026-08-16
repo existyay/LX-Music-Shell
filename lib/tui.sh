@@ -784,11 +784,25 @@ tui_render() {
     TUI_LAST_COLS="$cols"
     TUI_FULL_CLEAR=$do_full_clear
 
-    # 布局: 顶部 2 行 + 底部常驻区
-    local bottom=$((5 + 1 + 1 + 1))
-    local main_start=4
-    local main_end=$((lines - bottom))
-    (( main_end < main_start + 3 )) && main_end=$((main_start + 3))
+    # 布局: 顶部 2 行 + 底部常驻区, 根据窗口高度自适应
+    local lyric_h hint_h bottom main_start main_end
+    if (( lines >= 24 )); then
+        lyric_h=5; hint_h=1
+    elif (( lines >= 18 )); then
+        lyric_h=3; hint_h=1
+    elif (( lines >= 12 )); then
+        lyric_h=1; hint_h=1
+    else
+        lyric_h=0; hint_h=0
+    fi
+
+    bottom=$((1 + 1 + lyric_h + hint_h))  # 播放栏 + 进度 + 歌词 + 提示
+    main_start=4
+    (( lines < 16 )) && main_start=3
+    main_end=$((lines - bottom))
+    (( main_end < main_start + 1 )) && main_end=$((main_start + 1))
+    (( main_end > lines - 2 )) && main_end=$((lines - 2))
+    (( main_end < main_start )) && main_end=$main_start
 
     # 鼠标区域必须在主 shell 注册 (命令替换子 shell 会丢失数组修改)
     tui_register_regions "$main_start" "$main_end"
@@ -833,11 +847,27 @@ tui_render_frame() {
             ;;
     esac
 
-    local lyric_start=$((main_end + 1))
-    tui_render_lyrics "$lyric_start" 5
+    # 底部区域 (根据外层传入的布局参数自适应)
+    local lyric_h hint_h
+    if (( lines >= 24 )); then
+        lyric_h=5; hint_h=1
+    elif (( lines >= 18 )); then
+        lyric_h=3; hint_h=1
+    elif (( lines >= 12 )); then
+        lyric_h=1; hint_h=1
+    else
+        lyric_h=0; hint_h=0
+    fi
 
-    local hint_row=$((lyric_start + 5))
-    tui_render_hint "$hint_row"
+    local lyric_start=$((main_end + 1))
+    if (( lyric_h > 0 )); then
+        tui_render_lyrics "$lyric_start" "$lyric_h"
+    fi
+
+    if (( hint_h > 0 )); then
+        local hint_row=$((lyric_start + lyric_h))
+        tui_render_hint "$hint_row"
+    fi
     tui_render_playbar $((lines - 1))
     tui_render_progress "$lines"
 }
