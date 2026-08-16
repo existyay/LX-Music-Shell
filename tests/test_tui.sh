@@ -135,6 +135,15 @@ tui_op_move_down; assert_eq "search move_down 0->1" "1" "$UI_SELECTED"
 tui_op_move_down; tui_op_move_down; assert_eq "search move_down clamp 2" "2" "$UI_SELECTED"
 tui_op_move_top; assert_eq "search move_top" "0" "$UI_SELECTED"
 
+UI_SCREEN=quality_select
+TUI_SELECT_ITEMS=("HiRes (母带)" "FLAC (无损)" "HQ (320k)" "SQ (128k)")
+UI_SELECTED=0; UI_SCROLL_TOP=0
+tui_op_move_down; assert_eq "select move_down 0->1" "1" "$UI_SELECTED"
+tui_op_move_bottom; assert_eq "select move_bottom ->3" "3" "$UI_SELECTED"
+tui_op_move_top; assert_eq "select move_top" "0" "$UI_SELECTED"
+tui_item_count_result=$(tui_item_count)
+assert_eq "select item count=4" "4" "$tui_item_count_result"
+
 #==============================================================================
 echo -e "${YELLOW}=== 测试 7: 鼠标区域命中 → 动作 ===${NC}"
 #==============================================================================
@@ -150,6 +159,13 @@ assert_eq "点击列表第二行" "list:1" "$(tui_mouse_action 5 6)"
 assert_eq "点击搜索框" "search" "$(tui_mouse_action 5 4)"
 assert_eq "点击播放栏左侧=toggle" "toggle" "$(tui_mouse_action 5 29)"
 assert_eq "点击进度条 seek" "seek:50" "$(tui_mouse_action 50 30)"
+
+UI_SCREEN=quality_select
+TUI_SELECT_ITEMS=("HiRes (母带)" "FLAC (无损)" "HQ (320k)" "SQ (128k)")
+UI_SELECTED=0; UI_SCROLL_TOP=0
+tui_register_regions 4 12
+assert_eq "点击选择项首行" "select:0" "$(tui_mouse_action 5 5)"
+assert_eq "点击选择项第二行" "select:1" "$(tui_mouse_action 5 6)"
 
 #==============================================================================
 echo -e "${YELLOW}=== 测试 8: 渲染输出 ===${NC}"
@@ -196,6 +212,19 @@ assert_contains "搜索渲染含搜索框" "$clean" "搜索"
 assert_contains "搜索渲染含音质 chip" "$clean" "FLAC"
 assert_contains "搜索渲染含播放栏" "$clean" "🔊80%"
 assert_contains "搜索渲染含进度时间" "$clean" "01:35/03:42"
+
+render_quality_select() {
+    UI_SCREEN="quality_select"
+    UI_FOCUS="list"
+    TUI_SELECT_TITLE="选择音质"
+    TUI_SELECT_ITEMS=("HiRes (母带)" "FLAC (无损)" "HQ (320k)" "SQ (128k)")
+    UI_SELECTED=1; UI_SCROLL_TOP=0
+    tui_render_select 4 10 2>/dev/null
+}
+out=$(render_quality_select)
+clean=$(strip_ansi "$out")
+assert_contains "音质选择渲染含标题" "$clean" "选择音质"
+assert_contains "音质选择渲染含 FLAC" "$clean" "FLAC (无损)"
 
 #==============================================================================
 # 结果

@@ -94,10 +94,10 @@ test_add_search_result() {
     add_search_result "稻香|周杰伦|魔杰座|03:42|185810|http://c.jpg"
     add_search_result "晴天|周杰伦|叶惠美|04:29|186016|"
 
-    assert_eq "9 列轨道 (含封面)" \
-        "稻香|周杰伦|魔杰座|03:42|185810||http://c.jpg||" "${PLAYLIST[0]}"
-    assert_eq "9 列轨道 (无封面)" \
-        "晴天|周杰伦|叶惠美|04:29|186016||||" "${PLAYLIST[1]}"
+    assert_eq "10 列轨道 (含封面+来源)" \
+        "稻香|周杰伦|魔杰座|03:42|185810||http://c.jpg|||netease" "${PLAYLIST[0]}"
+    assert_eq "10 列轨道 (无封面+来源)" \
+        "晴天|周杰伦|叶惠美|04:29|186016|||||netease" "${PLAYLIST[1]}"
     assert_eq "共 2 首" "2" "${#PLAYLIST[@]}"
 }
 

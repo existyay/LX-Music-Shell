@@ -80,6 +80,14 @@ TUI_MENU_ITEMS=(
     "退出|quit"
 )
 
+# 选择子菜单 (音源/音质) 由主脚本填充
+# shellcheck disable=SC2034  # TUI_SELECT_* 跨文件由 lx-music-shell 填充/读取
+TUI_SELECT_ITEMS=()
+# shellcheck disable=SC2034  # 由 lx-music-shell 填充/读取
+TUI_SELECT_VALUES=()
+# shellcheck disable=SC2034  # 由 lx-music-shell 填充/读取
+TUI_SELECT_TITLE=""
+
 #==============================================================================
 # 工具: 终端尺寸 / 光标 / 字符宽度
 #==============================================================================
@@ -133,6 +141,15 @@ tui_trunc() {
 # 安全返回播放列表长度 (对 set -u / 未声明数组健壮)
 tui_list_n() {
     if [[ -n "${PLAYLIST+set}" ]]; then printf '%d' "${#PLAYLIST[@]}"; else printf '0'; fi
+}
+
+# 当前屏幕可移动条目数
+tui_item_count() {
+    case "${UI_SCREEN:-menu}" in
+        search)         tui_list_n ;;
+        source_select|quality_select) printf '%d' "${#TUI_SELECT_ITEMS[@]}" ;;
+        *)              printf '%d' "${#TUI_MENU_ITEMS[@]}" ;;
+    esac
 }
 
 # 居中计算左填充 (用于居中打印)
@@ -530,15 +547,21 @@ tui_render_hint() {
     cols=$(tui_cols)
     tui_blank_row "$row"
     local hint
-    if [[ "${UI_SCREEN:-menu}" == "search" ]]; then
-        if [[ "${UI_FOCUS:-list}" == "search" ]]; then
-            hint="输入关键词, [Enter]搜索  [Esc]返回菜单"
-        else
-            hint="[/]搜索  [↑↓/jk]选择  [Enter]播放  [Space]暂停  [n]下一首  [p]上一首  [+/-]音量  [Esc]菜单  [q]退出"
-        fi
-    else
-        hint="[↑↓/jk]选择  [Enter]确认  [/]搜索  [Space]暂停  [q]退出"
-    fi
+    case "${UI_SCREEN:-menu}" in
+        search)
+            if [[ "${UI_FOCUS:-list}" == "search" ]]; then
+                hint="输入关键词, [Enter]搜索  [Esc]返回菜单"
+            else
+                hint="[/]搜索  [↑↓/jk]选择  [Enter]播放  [Space]暂停  [n]下一首  [p]上一首  [+/-]音量  [Esc]菜单  [q]退出"
+            fi
+            ;;
+        source_select|quality_select)
+            hint="[↑↓/jk]选择  [Enter]确认  [Esc]返回菜单  [q]退出"
+            ;;
+        *)
+            hint="[↑↓/jk]选择  [Enter]确认  [/]搜索  [Space]暂停  [q]退出"
+            ;;
+    esac
     left=$(tui_left_pad "$hint" "$cols")
     printf '%*s%s%s%s' "$left" '' "${T_DIM}${T_FG_GRAY}" "$hint" "${T_RESET}"
 }
@@ -697,6 +720,9 @@ tui_render() {
         help)
             tui_render_help "$main_start" "$main_end"
             ;;
+        source_select|quality_select)
+            tui_render_select "$main_start" "$main_end"
+            ;;
         menu|*)
             tui_render_menu "$main_start" "$main_end"
             ;;
@@ -743,6 +769,48 @@ tui_render_help() {
 }
 
 #==============================================================================
+# 渲染: 通用选择子菜单 (音源/音质)
+#==============================================================================
+tui_render_select() {
+    local start_row="$1" end_row="$2" cols
+    cols=$(tui_cols)
+    tui_blank_area "$start_row" "$end_row"
+
+    tui_goto "$start_row" 2
+    printf '%s%s%s' "${T_BOLD}${T_FG_CYAN}" "${TUI_SELECT_TITLE}" "${T_RESET}"
+
+    local n=${#TUI_SELECT_ITEMS[@]}
+    local visible=$((end_row - start_row))
+    (( visible < 1 )) && visible=1
+
+    local sel="${UI_SELECTED:-0}"
+    if ((sel < UI_SCROLL_TOP)); then UI_SCROLL_TOP=$sel; fi
+    if ((sel >= UI_SCROLL_TOP + visible)); then UI_SCROLL_TOP=$((sel - visible + 1)); fi
+    if (( UI_SCROLL_TOP < 0 )); then UI_SCROLL_TOP=0; fi
+
+    if ((n == 0)); then
+        tui_goto $((start_row + 1)) 4
+        printf '%s(无可用选项)%s' "${T_DIM}${T_FG_GRAY}" "${T_RESET}"
+        return
+    fi
+
+    local i idx row label
+    for ((i = 0; i < visible; i++)); do
+        idx=$((UI_SCROLL_TOP + i))
+        (( idx >= n )) && break
+        row=$((start_row + 1 + i))
+        tui_blank_row "$row"
+        tui_goto "$row" 4
+        label="${TUI_SELECT_ITEMS[idx]}"
+        if [[ "$idx" == "$sel" ]]; then
+            printf '%s=> %s%s%s' "${T_BOLD}${T_FG_RED}" "${T_BOLD}${T_FG_RED}" "$label" "${T_RESET}"
+        else
+            printf '   %s%s%s' "${T_FG_WHITE}" "$label" "${T_RESET}"
+        fi
+    done
+}
+
+#==============================================================================
 # 鼠标区域注册 (供 input_mouse_to_action 命中测试)
 #
 # 区域命名:
@@ -767,6 +835,13 @@ tui_register_regions() {
             local i
             for ((i = 0; i < visible; i++)); do
                 input_register_region "list_$i" $((main_start + 1 + i)) 1 1 "$cols"
+            done
+            ;;
+        source_select|quality_select)
+            local visible=$((main_end - main_start))
+            local i
+            for ((i = 0; i < visible; i++)); do
+                input_register_region "select_$i" $((main_start + 1 + i)) 1 1 "$cols"
             done
             ;;
         menu|*)
@@ -809,6 +884,10 @@ tui_mouse_action() {
             local mi="${region#menu_}"
             printf 'menu:%d' "$mi"
             ;;
+        select_*)
+            local si="${region#select_}"
+            printf 'select:%d' "$((UI_SCROLL_TOP + si))"
+            ;;
         playbar)
             # 播放栏左半=暂停, 右半=下一首 (简化: 按列划分)
             if ((x <= 12)); then printf 'toggle'; else printf 'next'; fi
@@ -830,25 +909,14 @@ tui_mouse_action() {
 #==============================================================================
 tui_op_move_up() {
     local n
-    if [[ "${UI_SCREEN:-menu}" == "search" ]]; then
-        n=$(tui_list_n)
-        (( n > 0 )) && { UI_SELECTED=$((UI_SELECTED - 1)); (( UI_SELECTED < 0 )) && UI_SELECTED=0; }
-    else
-        UI_SELECTED=$((UI_SELECTED - 1))
-        (( UI_SELECTED < 0 )) && UI_SELECTED=0
-    fi
+    n=$(tui_item_count)
+    (( n > 0 )) && { UI_SELECTED=$((UI_SELECTED - 1)); (( UI_SELECTED < 0 )) && UI_SELECTED=0; }
 }
 
 tui_op_move_down() {
     local n
-    if [[ "${UI_SCREEN:-menu}" == "search" ]]; then
-        n=$(tui_list_n)
-        (( n > 0 )) && { UI_SELECTED=$((UI_SELECTED + 1)); (( UI_SELECTED >= n )) && UI_SELECTED=$((n - 1)); }
-    else
-        n=${#TUI_MENU_ITEMS[@]}
-        UI_SELECTED=$((UI_SELECTED + 1))
-        (( UI_SELECTED >= n )) && UI_SELECTED=$((n - 1))
-    fi
+    n=$(tui_item_count)
+    (( n > 0 )) && { UI_SELECTED=$((UI_SELECTED + 1)); (( UI_SELECTED >= n )) && UI_SELECTED=$((n - 1)); }
 }
 
 tui_op_move_top() {
@@ -858,23 +926,14 @@ tui_op_move_top() {
 
 tui_op_move_bottom() {
     local n
-    if [[ "${UI_SCREEN:-menu}" == "search" ]]; then
-        n=$(tui_list_n)
-    else
-        n=${#TUI_MENU_ITEMS[@]}
-    fi
+    n=$(tui_item_count)
     (( n > 0 )) && UI_SELECTED=$((n - 1))
 }
 
 tui_op_next_page() {
     local n
-    if [[ "${UI_SCREEN:-menu}" == "search" ]]; then
-        n=$(tui_list_n)
-    else
-        n=${#TUI_MENU_ITEMS[@]}
-    fi
-    UI_SELECTED=$((UI_SELECTED + 10))
-    (( UI_SELECTED >= n )) && UI_SELECTED=$((n - 1))
+    n=$(tui_item_count)
+    (( n > 0 )) && { UI_SELECTED=$((UI_SELECTED + 10)); (( UI_SELECTED >= n )) && UI_SELECTED=$((n - 1)); }
 }
 
 tui_op_prev_page() {
@@ -902,12 +961,14 @@ tui_op_search_backspace() {
     UI_QUERY="${UI_QUERY%?}"
 }
 
-# 退出搜索 (回到菜单)
+# 退出搜索/选择子菜单 (回到菜单)
 tui_op_search_cancel() {
-    if [[ "${UI_SCREEN:-menu}" == "search" ]]; then
+    if [[ "${UI_SCREEN:-menu}" != "menu" ]]; then
         UI_SCREEN="menu"
         UI_FOCUS="list"
         UI_QUERY=""
+        UI_SELECTED=0
+        UI_SCROLL_TOP=0
     fi
 }
 

@@ -15,7 +15,7 @@
 #==============================================================================
 
 # 版本信息
-VERSION="3.1.1"
+VERSION="3.1.2"
 
 # 优雅退出处理：在收到中断或终止信号时尝试停止播放器
 on_exit() {
@@ -190,6 +190,16 @@ load_config() {
     AUTO_UPDATE_SOURCES="${AUTO_UPDATE_SOURCES:-true}"
     UI_COLOR="${UI_COLOR:-true}"
     AUTO_RECONNECT="${AUTO_RECONNECT:-true}"
+    DEFAULT_QUALITY="${DEFAULT_QUALITY:-flac}"
+    QUALITY_MODE="${QUALITY_MODE:-highest}"
+    UI_TUI="${UI_TUI:-auto}"
+    UI_MOUSE="${UI_MOUSE:-auto}"
+    NETWORK_CHECK_INTERVAL="${NETWORK_CHECK_INTERVAL:-3}"
+    MAX_RECONNECT_ATTEMPTS="${MAX_RECONNECT_ATTEMPTS:-5}"
+    RECONNECT_DELAY="${RECONNECT_DELAY:-2}"
+    LX_API_URL="${LX_API_URL:-https://lxmusicapi.onrender.com}"
+    LX_API_KEY="${LX_API_KEY:-share-v3}"
+    LX_API_TIMEOUT="${LX_API_TIMEOUT:-15}"
 }
 
 save_config() {
@@ -212,14 +222,30 @@ PLAY_MODE="${PLAY_MODE:-list}"
 # 音量 (0-100)
 VOLUME="${VOLUME:-80}"
 
+# 默认音质 (hires/flac/320/128)
+DEFAULT_QUALITY="${DEFAULT_QUALITY:-flac}"
+
+# 音质回退模式 (highest/balanced/fastest)
+QUALITY_MODE="${QUALITY_MODE:-highest}"
+
 # 自动更新源列表
 AUTO_UPDATE_SOURCES="${AUTO_UPDATE_SOURCES:-true}"
 
 # UI设置
 UI_COLOR="${UI_COLOR:-true}"
+UI_TUI="${UI_TUI:-auto}"
+UI_MOUSE="${UI_MOUSE:-auto}"
 
 # 自动重连
 AUTO_RECONNECT="${AUTO_RECONNECT:-true}"
+NETWORK_CHECK_INTERVAL="${NETWORK_CHECK_INTERVAL:-3}"
+MAX_RECONNECT_ATTEMPTS="${MAX_RECONNECT_ATTEMPTS:-5}"
+RECONNECT_DELAY="${RECONNECT_DELAY:-2}"
+
+# LX-Music 聚合 API (用于解析 5 大音源真实 URL)
+LX_API_URL="${LX_API_URL:-https://lxmusicapi.onrender.com}"
+LX_API_KEY="${LX_API_KEY:-share-v3}"
+LX_API_TIMEOUT="${LX_API_TIMEOUT:-15}"
 EOF
 }
 
@@ -461,7 +487,7 @@ set_source() {
     shift
 
     case "$action" in
-        list)
+        ""|list)
             show_sources
             show_yinyuan_sources
             ;;
@@ -475,13 +501,41 @@ set_source() {
             yinyuan_select
             ;;
         *)
-            local normalized="${action,,}"
-            if [[ -n "${SOURCE_URLS[$normalized]}" ]] || declare -f "search_$normalized" >/dev/null 2>&1; then
+            local normalized
+            normalized=$(normalize_source_id "${action,,}")
+            if source_is_available "$normalized"; then
                 DEFAULT_SOURCE="$normalized"
-                echo -e "\033[32m已切换到源: $normalized\033[0m"
+                CURRENT_SOURCE="$normalized"
+                CURRENT_SOURCE_NAME="$(source_display_name "$normalized")"
+                save_config
+                echo -e "\033[32m已切换到源: ${CURRENT_SOURCE_NAME} (${normalized})\033[0m"
             else
-                echo -e "\033[31m错误: 未知源 '$action'\033[0m"
+                echo -e "\033[31m错误: 未知或不可用音源 '$action'\033[0m"
+                echo "可用: /source list 查看; 自定义源用 /source add <name> <url> 添加"
             fi
+            ;;
+    esac
+}
+
+#==============================================================================
+# 音质切换 (CLI: /quality [hires|flac|320|128])
+#==============================================================================
+set_quality() {
+    local q="$1"
+    if [[ -z "$q" ]]; then
+        echo "当前音质: ${DEFAULT_QUALITY:-flac}"
+        echo "可用: hires, flac, 320, 128"
+        return 0
+    fi
+    case "$q" in
+        hires|flac|320|128)
+            DEFAULT_QUALITY="$q"
+            save_config
+            echo -e "\033[32m已切换到音质: $(quality_label "$q") ($q)\033[0m"
+            ;;
+        *)
+            echo -e "\033[31m错误: 无效音质 '$q' (可用: hires, flac, 320, 128)\033[0m"
+            return 1
             ;;
     esac
 }
@@ -683,8 +737,19 @@ source_display_name() {
         qq)        printf 'QQ音乐' ;;
         migu)      printf '咪咕音乐' ;;
         ximalaya)  printf '喜马拉雅' ;;
-        *)         printf '%s' "${1:-${CURRENT_SOURCE:-netease}}" ;;
+        all)       printf '聚合搜索' ;;
+        *)         if [[ -n "${SOURCE_URLS[${1:-${CURRENT_SOURCE:-}}]:-}" ]]; then printf '自定义源 %s' "${1:-${CURRENT_SOURCE}}"; else printf '%s' "${1:-${CURRENT_SOURCE:-netease}}"; fi ;;
     esac
+}
+
+# 源是否真实可用 (有注册搜索函数或已配置自定义搜索 URL)
+source_is_available() {
+    local src
+    src=$(normalize_source_id "$1")
+    [[ -z "$src" ]] && return 1
+    declare -F "${src}_search" >/dev/null 2>&1 && return 0
+    [[ -n "${SOURCE_URLS[$src]:-}" ]] && return 0
+    return 1
 }
 
 # 后台拉取歌词 (netease 直连优先, 失败回退 LX API)
@@ -736,14 +801,18 @@ do_play() {
     PLAYLIST_INDEX=$index
     local track="${PLAYLIST[index]}"
 
-    # 统一 9 列: name|artist|album|duration|song_id|quality|cover|quals|url
-    local name artist album duration song_id quality cover quals url
-    IFS='|' read -r name artist album duration song_id quality cover quals url <<< "$track"
+    # 统一 10 列: name|artist|album|duration|song_id|quality|cover|quals|url|src
+    local name artist album duration song_id quality cover quals url track_src
+    IFS='|' read -r name artist album duration song_id quality cover quals url track_src <<< "$track"
     [[ -z "$name" ]] && name="未知"
     [[ -z "$artist" ]] && artist="未知歌手"
 
     local src
-    src=$(normalize_source_id "${CURRENT_SOURCE:-${DEFAULT_SOURCE:-netease}}")
+    if [[ -n "$track_src" ]]; then
+        src=$(normalize_source_id "$track_src")
+    else
+        src=$(normalize_source_id "${CURRENT_SOURCE:-${DEFAULT_SOURCE:-netease}}")
+    fi
 
     # 解析真实播放 URL (音质回退链)
     if [[ -z "$url" ]] || [[ "$url" == "null" ]]; then
@@ -758,8 +827,8 @@ do_play() {
             quality="${qr%%:*}"
             url="${qr#*:}"
         fi
-        # 回写解析结果
-        PLAYLIST[index]="$name|$artist|$album|$duration|$song_id|$quality|$cover|$quals|$url"
+        # 回写解析结果 (保留来源列)
+        PLAYLIST[index]="$name|$artist|$album|$duration|$song_id|$quality|$cover|$quals|$url|$src"
         track="${PLAYLIST[index]}"
     fi
 
@@ -1080,7 +1149,7 @@ clear_playlist() {
     echo -e "\033[32m✓ 播放列表已清空\033[0m"
 }
 
-# 追加一条统一 9 列轨道: name|artist|album|duration|song_id|quality|cover|quals|url
+# 追加一条统一轨道 (9/10 列兼容): name|artist|album|duration|song_id|quality|cover|quals|url|src
 add_to_playlist() {
     local track="$1"
     PLAYLIST+=("$track")
@@ -1090,10 +1159,12 @@ add_to_playlist() {
 # 将搜索结果行 (name|artist|album|duration|song_id|cover) 转为统一轨道并追加
 add_search_result() {
     local line="$1"
+    local source="${2:-}"
     local name="" artist="" album="" duration="" song_id="" cover=""
     IFS='|' read -r name artist album duration song_id cover <<< "$line"
     [[ -z "$name" ]] && return
-    add_to_playlist "$name|$artist|$album|$duration|$song_id||$cover||"
+    [[ -z "$source" ]] && source="${CURRENT_SOURCE:-${DEFAULT_SOURCE:-netease}}"
+    add_to_playlist "$name|$artist|$album|$duration|$song_id||$cover|||$source"
 }
 
 #==============================================================================
@@ -1159,7 +1230,7 @@ search_append_source() {
     if [[ -n "$results" ]]; then
         while IFS= read -r line; do
             [[ -z "$line" ]] && continue
-            add_search_result "$line"
+            add_search_result "$line" "$src"
             ((n++))
             [[ $n -ge $limit ]] && break
         done <<< "$results"
@@ -1498,6 +1569,7 @@ show_help() {
   /list, /l            显示播放列表
   /clear               清空播放列表
   /mode [mode]         播放模式 (list/loop/single/random)
+  /quality [q]         设置音质 (hires/flac/320/128)
   /volume [n]          设置音量 (0-100)
 
 搜索播放:
@@ -1611,6 +1683,9 @@ interactive_mode() {
             /mode)
                 set_play_mode "${rest_args[@]:-}"
                 ;;
+            /quality)
+                set_quality "${rest_args[@]:-}"
+                ;;
             /volume|/v)
                 set_volume "${rest_args[@]:-}"
                 ;;
@@ -1688,6 +1763,9 @@ command_mode() {
         source|--source)
             set_source "$@"
             ;;
+        quality|--quality)
+            set_quality "$@"
+            ;;
         update-sources|--update-sources)
             fetch_source_api
             ;;
@@ -1739,20 +1817,28 @@ tui_cycle_quality() {
         320)   DEFAULT_QUALITY="128" ;;
         *)     DEFAULT_QUALITY="hires" ;;
     esac
+    save_config
 }
 
 tui_cycle_source() {
     local -a srcs
-    srcs=(netease kugou kuwo qq migu)
+    srcs=()
+
+    local s
+    for s in netease kugou kuwo qq migu; do
+        source_is_available "$s" && srcs+=("$s")
+    done
 
     # 追加用户自定义源 (yinyuan/sources.list), 使切源功能覆盖自定义源
     local name
     for name in $(printf '%s\n' "${!SOURCE_URLS[@]}" | sort); do
         case "$name" in
             netease|kugou|kuwo|qq|migu|ximalaya) continue ;;
-            *) srcs+=("$name") ;;
         esac
+        source_is_available "$name" && srcs+=("$name")
     done
+
+    [[ ${#srcs[@]} -eq 0 ]] && return 1
 
     local cur found=-1 i
     cur=$(normalize_source_id "${CURRENT_SOURCE:-netease}")
@@ -1760,17 +1846,80 @@ tui_cycle_source() {
         [[ "${srcs[i]}" == "$cur" ]] && { found=$i; break; }
     done
     local next=$(( (found + 1) % ${#srcs[@]} ))
-    DEFAULT_SOURCE="${srcs[next]}"
-    CURRENT_SOURCE="$DEFAULT_SOURCE"
-    case "$CURRENT_SOURCE" in
-        netease) CURRENT_SOURCE_NAME="网易云音乐" ;;
-        kugou)   CURRENT_SOURCE_NAME="酷狗音乐" ;;
-        kuwo)    CURRENT_SOURCE_NAME="酷我音乐" ;;
-        qq)      CURRENT_SOURCE_NAME="QQ音乐" ;;
-        migu)    CURRENT_SOURCE_NAME="咪咕音乐" ;;
-        ximalaya) CURRENT_SOURCE_NAME="喜马拉雅" ;;
-        *)       CURRENT_SOURCE_NAME="自定义源 $CURRENT_SOURCE" ;;
+    tui_apply_source_selection "${srcs[next]}"
+}
+
+# 打开音源选择子菜单
+tui_op_open_source_select() {
+    # shellcheck disable=SC2034  # TUI_SELECT_TITLE 由 lib/tui.sh 读取渲染
+    TUI_SELECT_TITLE="选择音源"
+    TUI_SELECT_ITEMS=()
+    TUI_SELECT_VALUES=()
+
+    local src
+    for src in netease kugou kuwo qq migu; do
+        if source_is_available "$src"; then
+            TUI_SELECT_ITEMS+=("$(source_display_name "$src")")
+            TUI_SELECT_VALUES+=("$src")
+        fi
+    done
+    # 追加自定义源 (排除内置已加)
+    local name
+    for name in $(printf '%s\n' "${!SOURCE_URLS[@]}" | sort); do
+        case "$name" in
+            netease|kugou|kuwo|qq|migu|ximalaya) continue ;;
+        esac
+        if source_is_available "$name"; then
+            TUI_SELECT_ITEMS+=("自定义源 $name")
+            TUI_SELECT_VALUES+=("$name")
+        fi
+    done
+
+    UI_SCREEN="source_select"
+    UI_FOCUS="list"
+    UI_SELECTED=0
+    UI_SCROLL_TOP=0
+}
+
+# 打开音质选择子菜单
+tui_op_open_quality_select() {
+    # shellcheck disable=SC2034  # TUI_SELECT_TITLE 由 lib/tui.sh 读取渲染
+    TUI_SELECT_TITLE="选择音质"
+    TUI_SELECT_ITEMS=("HiRes (母带)" "FLAC (无损)" "HQ (320k)" "SQ (128k)")
+    TUI_SELECT_VALUES=(hires flac 320 128)
+    UI_SCREEN="quality_select"
+    UI_FOCUS="list"
+    UI_SELECTED=0
+    UI_SCROLL_TOP=0
+}
+
+# 应用音源选择
+tui_apply_source_selection() {
+    local src="$1"
+    source_is_available "$src" || return 1
+    DEFAULT_SOURCE="$src"
+    CURRENT_SOURCE="$src"
+    CURRENT_SOURCE_NAME="$(source_display_name "$src")"
+    save_config
+    UI_SCREEN="menu"
+    UI_FOCUS="list"
+    UI_SELECTED=0
+    UI_SCROLL_TOP=0
+}
+
+# 应用音质选择
+tui_apply_quality_selection() {
+    local q="$1"
+    case "$q" in
+        hires|flac|320|128) ;;
+        *) return 1 ;;
     esac
+    DEFAULT_QUALITY="$q"
+    save_config
+    UI_SCREEN="menu"
+    UI_FOCUS="list"
+    UI_SELECTED=0
+    UI_SCROLL_TOP=0
 }
 
 tui_volume_up() {
@@ -1800,14 +1949,23 @@ tui_op_select() {
         fi
         return
     fi
+    if [[ "${UI_SCREEN:-menu}" == "source_select" ]]; then
+        tui_apply_source_selection "${TUI_SELECT_VALUES[$UI_SELECTED]:-}"
+        return
+    fi
+    if [[ "${UI_SCREEN:-menu}" == "quality_select" ]]; then
+        tui_apply_quality_selection "${TUI_SELECT_VALUES[$UI_SELECTED]:-}"
+        return
+    fi
+
     local action
     action=$(tui_menu_selected_action)
     case "$action" in
         search)   tui_op_start_search ;;
         playlist) UI_SCREEN="search"; UI_FOCUS="list"; UI_QUERY=""; UI_SELECTED=0; UI_SCROLL_TOP=0 ;;
-        source)   tui_cycle_source ;;
-        quality)  tui_cycle_quality ;;
-        mode)     tui_cycle_mode ;;
+        source)   tui_op_open_source_select ;;
+        quality)  tui_op_open_quality_select ;;
+        mode)     tui_cycle_mode; save_config ;;
         help)     UI_SCREEN="help" ;;
         quit)     UI_QUIT=1 ;;
     esac
@@ -1832,6 +1990,13 @@ tui_handle_click() {
             local mi="${action#menu:}"
             if [[ "$mi" =~ ^[0-9]+$ ]]; then
                 UI_SELECTED=$mi
+                tui_op_select
+            fi
+            ;;
+        select:*)
+            local si="${action#select:}"
+            if [[ "$si" =~ ^[0-9]+$ ]] && (( si < ${#TUI_SELECT_ITEMS[@]} )); then
+                UI_SELECTED=$si
                 tui_op_select
             fi
             ;;
@@ -1915,7 +2080,7 @@ interactive_mode_tui() {
 
         case "$ev_type" in
             "$EVENT_KEY_ESC")
-                if [[ "${UI_SCREEN:-menu}" == "search" ]]; then tui_op_search_cancel; else running=0; fi
+                if [[ "${UI_SCREEN:-menu}" == "menu" ]]; then running=0; else tui_op_search_cancel; fi
                 ;;
             "$EVENT_KEY_UP")          tui_op_move_up ;;
             "$EVENT_KEY_DOWN")        tui_op_move_down ;;
